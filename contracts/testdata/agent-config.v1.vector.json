@@ -1,0 +1,165 @@
+{
+  "_warning": "TEST ONLY, never use in production. Synthetic key pair generated for tests; this public key must never be trusted by a production agent build. Payloads are synthetic fixtures, not real pattern/coefficient content.",
+  "vector_version": 1,
+  "encoding": {
+    "envelope_fields": "payload, sig: base64url (RFC 4648 section 5), NO padding, strict (reject '=', '+', '/', whitespace, non-canonical trailing bits). kid: string [A-Za-z0-9._-]{1,32}.",
+    "signed_bytes": "Ed25519 signs the DECODED raw payload bytes (UTF-8 JSON), NOT the base64url text.",
+    "public_key": "Raw 32-byte Ed25519 public key, standard base64 WITH padding.",
+    "signature": "64 bytes, standard Ed25519 (RFC 8032), no prehash.",
+    "dates": "UTC ISO 8601 with 'Z' (e.g. 2026-11-01T00:00:00.000Z)."
+  },
+  "check_order": [
+    "envelope shape and strict base64url decode (sig must be 64 bytes) -> malformed",
+    "kid in trusted_keys -> unknown_kid",
+    "Ed25519 verify over decoded payload bytes -> bad_signature",
+    "UTF-8 + JSON + schema (contracts/agent-config.v1.schema.json) -> invalid_payload",
+    "verify_at >= expires_at -> expired",
+    "config_version < last_accepted_config_version -> rollback"
+  ],
+  "verify_at": "2026-11-15T00:00:00Z",
+  "trusted_keys": {
+    "test-key-1": "qKAa7EtbSu4dcfPMnJ3vZYiCTwJieVNy9c6EqFBCK/o="
+  },
+  "cases": [
+    {
+      "name": "valid",
+      "description": "Geçerli zarf kabul edilir.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "IOXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": true,
+        "config_version": 2
+      }
+    },
+    {
+      "name": "payload_tampered",
+      "description": "Çözülmüş payload baytlarında tek bayt değişti.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3dlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "IOXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "name": "sig_tampered",
+      "description": "İmza baytlarında tek bayt değişti.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "IeXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "name": "wrong_key",
+      "description": "Başka bir anahtarla imzalanmış ama kid güvenilen anahtarı gösteriyor.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "jMGsEBlZmimJOlaeL2ekWCFGnY4Z-FYYZNQjBVka8pO4jenKY6mO4TL59h5sd6S6Y7JNh7bNVEs3PcOosL1QCw",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "name": "unknown_kid",
+      "description": "kid güvenilen anahtarlar arasında yok.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "IOXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-unknown-kid"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "unknown_kid"
+      }
+    },
+    {
+      "name": "expired",
+      "description": "İmza geçerli, expires_at verify_at'ten önce.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTEwLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMS0xMFQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "lL3FKYRjuW5QTnUea75QSSsVxlNWZe8tqD8MKnd7ujTSAbQS_ZTLUQgeqfD3FbnxRgP-Pe20eRtI3EEkHlv6Bg",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "rollback_v2_accepted",
+      "description": "Rollback senaryosu 1/2: v2 kabul edilir (istemci last_accepted'ı 2'ye çıkarır).",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "IOXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": true,
+        "config_version": 2
+      }
+    },
+    {
+      "name": "rollback_v1_rejected",
+      "description": "Rollback senaryosu 2/2: v1 imzası geçerli ama config_version 2'den düşük.",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoxLCJpc3N1ZWRfYXQiOiIyMDI2LTEwLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0",
+        "sig": "Ug81TJKrLaE8A_fcnikBiGJA9WTF2lGHOBhhH4u28sknabQweP5zOGPDjOdid7BdHkHHayUFKeESWdeBRrlqDQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 2,
+      "expect": {
+        "ok": false,
+        "reason": "rollback"
+      }
+    },
+    {
+      "name": "malformed_base64",
+      "description": "payload base64url değil.",
+      "envelope": {
+        "payload": "!!!not-base64!!!",
+        "sig": "IOXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "malformed_padding",
+      "description": "payload '=' dolgusu içeriyor (dolgusuz base64url zorunlu).",
+      "envelope": {
+        "payload": "eyJwYXlsb2FkX3ZlcnNpb24iOjMsImNvbmZpZ192ZXJzaW9uIjoyLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJleHBpcmVzX2F0IjoiMjAyNi0xMi0wMVQwMDowMDowMC4wMDBaIiwiZnJpY3Rpb24iOnsiZGV0ZWN0b3JfdmVyc2lvbiI6NywicmVwZWF0X21pbl90dXJucyI6MiwicmVwZWF0X2phY2NhcmQiOjAuNzUsImVycm9yX3Bhc3RlX21pbl9zaGFyZSI6MC41LCJmZWVkYmFja19wYXR0ZXJucyI6W3siY2F0ZWdvcnkiOiJlcnJvcl9yZXBvcnQiLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctKHBhdHRlcm58YSkiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX0seyJjYXRlZ29yeSI6ImNvcnJlY3Rpb24iLCJsYW5nIjoiZW4iLCJwYXR0ZXJuIjoiZml4dHVyZS1uZWctcGF0dGVybi1iIiwid2hvbGVfbWVzc2FnZSI6dHJ1ZX0seyJjYXRlZ29yeSI6InBvc2l0aXZlX2FjayIsImxhbmciOiJ0ciIsInBhdHRlcm4iOiJmaXh0dXJlLW5lZy1wYXR0ZXJuLWMiLCJ3aG9sZV9tZXNzYWdlIjpmYWxzZX1dLCJuZWdhdG9ycyI6W3sibGFuZyI6ImVuIiwid29yZCI6ImZpeHR1cmVub3QiLCJwb3NpdGlvbiI6ImJlZm9yZSJ9XX0sInRvcGljcyI6eyJsYWJlbHMiOlsiZmVhdHVyZSIsImJ1Z2ZpeCIsInJlZmFjdG9yIiwidGVzdCIsImRvY3MiLCJkZXZvcHMiLCJkYXRhIiwiZXhwbG9yZSIsIm90aGVyIl0sImV4dGVuc2lvbl9zaWduYWxzIjp7Ii5maXh0dXJlZXh0IjpbeyJsYWJlbCI6ImRvY3MiLCJ3ZWlnaHQiOjF9XX0sInRvb2xfc2lnbmFscyI6eyJGaXh0dXJlVG9vbCI6W3sibGFiZWwiOiJleHBsb3JlIiwid2VpZ2h0IjoxfV19LCJrZXl3b3JkX3dlaWdodHMiOnsiZmVhdHVyZSI6W3sidGVybSI6ImZpeHR1cmUtdGVybS1hIiwid2VpZ2h0IjoxfV19LCJtaW5fc2NvcmUiOjEsImZhbGxiYWNrIjoib3RoZXIifSwidXNhZ2UiOnsiY29udGV4dF9iYW5kcyI6WzEwMDAwMCwyMDAwMDBdfX0=",
+        "sig": "IOXKk5qAEDuoCAJcrHiYBAk2I1_2H6ZX5mBpbMgUC-rHtlzUmLOFsTrQHwvxnt3f13LmcSJgznZPKcNAjzM7DQ",
+        "kid": "test-key-1"
+      },
+      "last_accepted_config_version": 0,
+      "expect": {
+        "ok": false,
+        "reason": "malformed"
+      }
+    }
+  ]
+}

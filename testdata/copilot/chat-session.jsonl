@@ -1,0 +1,10 @@
+{"kind":0,"v":{"sessionId":"synthetic-session","creationDate":1790000000000,"requests":[]}}
+{"kind":2,"k":["requests"],"v":[{"requestId":"request_a1","timestamp":1790000001000,"modelId":"copilot/claude-test-1","message":{"text":"Please refactor this SENTINEL_PROMPT_TEXT helper","parts":[{"text":"SENTINEL_PROMPT_TEXT"}]},"response":[{"value":"SENTINEL_PROMPT_TEXT answer"}],"variableData":{"variables":[{"name":"SENTINEL_PROMPT_TEXT"}]}},{"requestId":"request_a2","timestamp":1790000060000,"modelId":"copilot/claude-test-1","message":{"text":"Bu yanlış, that is wrong again SENTINEL_PROMPT_TEXT"},"response":[]}]}
+{"kind":1,"k":["requests",0,"modelState"],"v":{"value":1,"completedAt":1790000030000}}
+{"kind":1,"k":["requests",1,"modelState"],"v":{"value":2,"completedAt":1790000090000}}
+{"kind":1,"k":["requests",0,"result"],"v":{"timings":{"firstProgress":10},"metadata":{"resolvedModel":"claude-test-1-resolved","toolCallRounds":[{"response":"SENTINEL_PROMPT_TEXT","toolCalls":[{"name":"read_file","arguments":"SENTINEL_PROMPT_TEXT"},{"name":"grep_search"}]},{"toolCalls":[{"name":"read_file"}]}]}}}
+{"kind":2,"k":["requests"],"v":[{"requestId":"request_h1","timestamp":1790000100000,"modelId":"copilot/claude-test-1","hiddenFromTranscript":true,"message":{"text":"hidden wrong SENTINEL_PROMPT_TEXT"}}],"i":2}
+{"kind":2,"k":["requests"],"v":[{"requestId":"request_b1","timestamp":1790000200000,"modelId":"copilot/claude-test-2","message":{"text":"fresh start SENTINEL_PROMPT_TEXT"},"modelState":{"value":1,"completedAt":1790000230000}}],"i":1}
+{"kind":2,"k":["requests",0,"response"],"v":[{"value":"SENTINEL_PROMPT_TEXT large unrelated patch","kind":"markdownContent"}]}
+{"kind":1,"k":["requests",0,"variableData"],"v":{"variables":[{"name":"SENTINEL_PROMPT_TEXT"}]}}
+{"kind":1,"k":["requests",0,"result"],"v":{"SENTINEL_PROMPT_TEXT": 

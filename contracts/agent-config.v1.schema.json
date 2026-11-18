@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "payload_version": {
+      "type": "number",
+      "const": 3
+    },
+    "config_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Monotonically increasing; clients must reject a value lower than the last accepted one."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "description": "UTC (Z) timestamp."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "description": "UTC (Z) timestamp; must be > issued_at and <= issued_at + 90 days."
+    },
+    "min_agent_version": {
+      "type": "string",
+      "pattern": "^\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}$"
+    },
+    "friction": {
+      "type": "object",
+      "properties": {
+        "detector_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
+          "description": "Version of the pattern set and detector rules; reported with every session."
+        },
+        "repeat_min_turns": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 20
+        },
+        "repeat_jaccard": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 0.99,
+          "description": "Estimated 3-gram Jaccard similarity at which a user message counts as a repeat of the previous one."
+        },
+        "error_paste_min_share": {
+          "type": "number",
+          "minimum": 0.3,
+          "maximum": 1,
+          "description": "Minimum share of a message made of error output to count as an error paste after the agent edited files."
+        },
+        "feedback_patterns": {
+          "minItems": 1,
+          "maxItems": 256,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "error_report",
+                  "correction",
+                  "positive_ack"
+                ]
+              },
+              "lang": {
+                "type": "string",
+                "enum": [
+                  "en",
+                  "tr"
+                ]
+              },
+              "pattern": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 120,
+                "pattern": "^[a-z0-9 '()|?-]+$",
+                "description": "Lowercase ASCII pattern; metacharacters limited to ( ) | ?. Matched on word boundaries against ASCII-folded text."
+              },
+              "whole_message": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "category",
+              "lang",
+              "pattern"
+            ]
+          }
+        },
+        "negators": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "lang": {
+                "type": "string",
+                "enum": [
+                  "en",
+                  "tr"
+                ]
+              },
+              "word": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 20,
+                "pattern": "^[a-z']+$"
+              },
+              "position": {
+                "type": "string",
+                "enum": [
+                  "before",
+                  "after"
+                ]
+              }
+            },
+            "required": [
+              "lang",
+              "word",
+              "position"
+            ]
+          }
+        }
+      },
+      "required": [
+        "detector_version",
+        "repeat_min_turns",
+        "repeat_jaccard",
+        "error_paste_min_share",
+        "feedback_patterns",
+        "negators"
+      ]
+    },
+    "topics": {
+      "type": "object",
+      "properties": {
+        "labels": {
+          "minItems": 1,
+          "maxItems": 9,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "devops",
+              "data",
+              "explore",
+              "other"
+            ]
+          }
+        },
+        "extension_signals": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[._][a-z0-9_.+-]{1,24}$"
+          },
+          "additionalProperties": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "enum": [
+                    "feature",
+                    "bugfix",
+                    "refactor",
+                    "test",
+                    "docs",
+                    "devops",
+                    "data",
+                    "explore",
+                    "other"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10
+                }
+              },
+              "required": [
+                "label",
+                "weight"
+              ]
+            }
+          },
+          "description": "Lowercase file-path suffix -> label weights. At most 128 keys."
+        },
+        "tool_signals": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+          },
+          "additionalProperties": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "enum": [
+                    "feature",
+                    "bugfix",
+                    "refactor",
+                    "test",
+                    "docs",
+                    "devops",
+                    "data",
+                    "explore",
+                    "other"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10
+                }
+              },
+              "required": [
+                "label",
+                "weight"
+              ]
+            }
+          },
+          "description": "Tool name -> label weights. At most 64 keys."
+        },
+        "keyword_weights": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "devops",
+              "data",
+              "explore",
+              "other"
+            ]
+          },
+          "additionalProperties": {
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "term": {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 40,
+                  "pattern": "^[\\p{L}\\p{N}](?:[\\p{L}\\p{N} '-]*[\\p{L}\\p{N}])?$",
+                  "description": "Plain lowercase substring (NFC); matched case-insensitively. Not a regex."
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10
+                }
+              },
+              "required": [
+                "term",
+                "weight"
+              ]
+            }
+          },
+          "description": "Label -> plain-substring keyword weights. At most 64 terms per label."
+        },
+        "min_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "fallback": {
+          "type": "string",
+          "enum": [
+            "feature",
+            "bugfix",
+            "refactor",
+            "test",
+            "docs",
+            "devops",
+            "data",
+            "explore",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "labels",
+        "extension_signals",
+        "tool_signals",
+        "keyword_weights",
+        "min_score",
+        "fallback"
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "context_bands": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 10000000
+          },
+          "description": "Strictly increasing prompt-size boundaries (tokens)."
+        }
+      },
+      "required": [
+        "context_bands"
+      ]
+    }
+  },
+  "required": [
+    "payload_version",
+    "config_version",
+    "issued_at",
+    "expires_at",
+    "friction",
+    "topics",
+    "usage"
+  ]
+}

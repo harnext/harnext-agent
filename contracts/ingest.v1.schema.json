@@ -1,0 +1,685 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "payload_version": {
+      "type": "number",
+      "const": 5
+    },
+    "agent_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "config_version": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sessions": {
+      "minItems": 1,
+      "maxItems": 200,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "session_external_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "tool_name": {
+            "type": "string",
+            "enum": [
+              "claude_code",
+              "vscode_copilot"
+            ]
+          },
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?![/~]|[A-Za-z]:)[^\\\\]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "topic": {
+            "type": "string",
+            "enum": [
+              "feature",
+              "bugfix",
+              "refactor",
+              "test",
+              "docs",
+              "devops",
+              "data",
+              "explore",
+              "other"
+            ]
+          },
+          "quality": {
+            "type": "object",
+            "properties": {
+              "exchanges": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "analyzed_exchanges": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "friction_exchanges": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "fx_pushback": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "fx_tool_loop": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "fx_interrupt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "fx_primary_pushback": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "fx_primary_tool_loop": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "fx_primary_interrupt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "sig_error_report": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "sig_correction": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "sig_repeat": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "sig_error_paste_after_fix": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "sig_positive_ack": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "tool_calls": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "tool_errors": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "terminal_nonzero": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "repeated_error_runs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "repeated_error_calls": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "responses": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "cancelled_responses": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "interrupted_tools": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "permission_denials": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "first_friction_exchange": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "signal_coverage": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 31
+              },
+              "detector_version": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              }
+            },
+            "required": [
+              "exchanges",
+              "analyzed_exchanges",
+              "friction_exchanges",
+              "fx_pushback",
+              "fx_tool_loop",
+              "fx_interrupt",
+              "fx_primary_pushback",
+              "fx_primary_tool_loop",
+              "fx_primary_interrupt",
+              "sig_error_report",
+              "sig_correction",
+              "sig_repeat",
+              "sig_error_paste_after_fix",
+              "sig_positive_ack",
+              "tool_calls",
+              "tool_errors",
+              "terminal_nonzero",
+              "repeated_error_runs",
+              "repeated_error_calls",
+              "responses",
+              "cancelled_responses",
+              "interrupted_tools",
+              "permission_denials",
+              "first_friction_exchange",
+              "signal_coverage",
+              "detector_version"
+            ],
+            "additionalProperties": false
+          },
+          "turn_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "description": "Must be >= 2024-01-01T00:00:00Z; ended_at - started_at <= 90 days."
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "usage": {
+            "minItems": 1,
+            "maxItems": 400,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "day": {
+                  "type": "string",
+                  "format": "date",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                },
+                "speed": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "fast",
+                    "unknown"
+                  ]
+                },
+                "prompt_floor": {
+                  "type": "integer",
+                  "minimum": -1,
+                  "maximum": 10000000000
+                },
+                "input_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000000
+                },
+                "output_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000000
+                },
+                "cache_read_tokens": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000000
+                },
+                "cache_creation_tokens": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000000
+                },
+                "cache_creation_1h_tokens": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000000000
+                },
+                "web_search_requests": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                "web_fetch_requests": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                "copilot_credits": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "tokens_estimated": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "model",
+                "day",
+                "speed",
+                "prompt_floor",
+                "input_tokens",
+                "output_tokens"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "folders": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512,
+                      "pattern": "^(?![/~]|[A-Za-z]:)[^\\\\]+$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "turn_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000
+                },
+                "quality": {
+                  "type": "object",
+                  "properties": {
+                    "exchanges": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "analyzed_exchanges": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "friction_exchanges": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "fx_pushback": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "fx_tool_loop": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "fx_interrupt": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "fx_primary_pushback": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "fx_primary_tool_loop": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "fx_primary_interrupt": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "sig_error_report": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "sig_correction": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "sig_repeat": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "sig_error_paste_after_fix": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "sig_positive_ack": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "tool_calls": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "tool_errors": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "terminal_nonzero": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "repeated_error_runs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "repeated_error_calls": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "responses": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "cancelled_responses": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "interrupted_tools": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "permission_denials": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000000
+                    },
+                    "first_friction_exchange": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10000000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "signal_coverage": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 31
+                    },
+                    "detector_version": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000
+                    }
+                  },
+                  "required": [
+                    "exchanges",
+                    "analyzed_exchanges",
+                    "friction_exchanges",
+                    "fx_pushback",
+                    "fx_tool_loop",
+                    "fx_interrupt",
+                    "fx_primary_pushback",
+                    "fx_primary_tool_loop",
+                    "fx_primary_interrupt",
+                    "sig_error_report",
+                    "sig_correction",
+                    "sig_repeat",
+                    "sig_error_paste_after_fix",
+                    "sig_positive_ack",
+                    "tool_calls",
+                    "tool_errors",
+                    "terminal_nonzero",
+                    "repeated_error_runs",
+                    "repeated_error_calls",
+                    "responses",
+                    "cancelled_responses",
+                    "interrupted_tools",
+                    "permission_denials",
+                    "first_friction_exchange",
+                    "signal_coverage",
+                    "detector_version"
+                  ],
+                  "additionalProperties": false
+                },
+                "usage": {
+                  "maxItems": 400,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "day": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "speed": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "fast",
+                          "unknown"
+                        ]
+                      },
+                      "prompt_floor": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 10000000000
+                      },
+                      "input_tokens": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000000
+                      },
+                      "output_tokens": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000000
+                      },
+                      "cache_read_tokens": {
+                        "default": 0,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000000
+                      },
+                      "cache_creation_tokens": {
+                        "default": 0,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000000
+                      },
+                      "cache_creation_1h_tokens": {
+                        "default": 0,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100000000000
+                      },
+                      "web_search_requests": {
+                        "default": 0,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000000000
+                      },
+                      "web_fetch_requests": {
+                        "default": 0,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000000000
+                      },
+                      "copilot_credits": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "tokens_estimated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "model",
+                      "day",
+                      "speed",
+                      "prompt_floor",
+                      "input_tokens",
+                      "output_tokens"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "turn_count",
+                "quality",
+                "usage"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "session_external_id",
+          "tool_name",
+          "project",
+          "topic",
+          "quality",
+          "turn_count",
+          "started_at",
+          "ended_at",
+          "usage",
+          "folders"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "payload_version",
+    "agent_version",
+    "sessions"
+  ]
+}
