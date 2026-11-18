@@ -47,6 +47,9 @@ type chatSource struct {
 
 var _ watcher.ChatSink = (*chatSource)(nil)
 
+// NewChatSink feeds chat session lines into agg without content analysis, for one-shot readers that keep no state.
+func NewChatSink(agg *aggregate.CopilotAggregator) watcher.ChatSink { return newChatSource(agg) }
+
 func newChatSource(agg *aggregate.CopilotAggregator) *chatSource {
 	return &chatSource{agg: agg, dirs: map[string]*folderEntry{}, applied: map[string]struct{}{}}
 }

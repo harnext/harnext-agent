@@ -1,4 +1,4 @@
-// Package cli implements the agent's command line: init, run, status, stats, preview and stop.
+// Package cli implements the agent's command line: init, run, status, stats, preview, scan and stop.
 package cli
 
 import (
@@ -47,7 +47,7 @@ func New(env Env) *cobra.Command {
 	root.SetVersionTemplate("harnext-agent " + strings.ReplaceAll(env.Version, "{{", "") + "\n")
 	root.SetOut(env.Out)
 	root.SetErr(env.Err)
-	root.AddCommand(initCmd(env), runCmd(env), statusCmd(env), statsCmd(env), previewCmd(env), stopCmd(env), serviceCmd(env), copilotCmd(env))
+	root.AddCommand(initCmd(env), runCmd(env), statusCmd(env), statsCmd(env), previewCmd(env), stopCmd(env), serviceCmd(env), copilotCmd(env), scanCmd(env))
 	return root
 }
 

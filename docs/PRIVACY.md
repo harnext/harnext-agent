@@ -64,6 +64,10 @@ Everything in it is a number, a date, a model name, a fixed label or a project i
 
 About the project identity: for a git repository it is `owner/repo` and the folder inside the repository (`apps/web`). Outside git it is the working folder with your home directory replaced by `~` (for example `~/work/client-app`). A folder outside your home directory is sent as it is, so avoid sensitive names in such paths, or ask your administrator how to handle it.
 
+## The one-off scan and shareable card
+
+`harnext-agent scan` (also `curl -fsSL app.harnext.ai/scan.sh | sh`) reads the same local files for the last 30 days, installs nothing, writes nothing to disk and sends nothing by itself: it prints a summary on your screen. Only if you answer yes, it prints the exact JSON it would send (token totals per model, session and active-day counts; project names only if you say yes to that separately; the schema is [contracts/card.v1.schema.json](../contracts/card.v1.schema.json)) and asks once more. The server keeps this as a draft behind a private link that expires in 24 hours. Nothing is public until you publish it: you enter your seat price, choose whether project names may be shown (they are deleted from the card if you do not) and confirm. A published card is public at its link and stays until you delete it with the delete link shown once at publishing (there are no accounts: keep that link). Links are random and only their SHA-256 hashes are stored. Network addresses are not stored as such: a keyed hash is kept for rate limiting and removed after two hours. The card shows token counts and an estimate at current list prices, marked as self-reported and not verified; search engines are asked not to index it.
+
 ## What is never sent
 
 Prompts and replies, the AI's reasoning, tool input and output (commands, file contents, error text), source code, file names, full paths inside your home directory, your user name and computer name, branch names, git credentials, environment variables, your e-mail address (the agent payload has no e-mail field), screenshots.

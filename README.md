@@ -14,6 +14,7 @@ This repository holds the agent and the wire contracts it speaks. The Harnext se
 
 ```sh
 harnext-agent preview              # prints the exact JSON the agent would send, sends nothing
+harnext-agent scan --json          # the one-off summary as the JSON a shareable card would send, sends nothing
 go test ./internal/service -run TestNoFakeSecretLeavesTheMachine
 ```
 

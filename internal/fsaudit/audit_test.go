@@ -57,6 +57,10 @@ var allowed = map[use]string{
 	{"internal/cli/status.go", "os.Stat"}:               "checks that the agent's database exists",
 	{"internal/cli/service.go", "os.Stat"}:              "checks whether the agent's service file exists",
 
+	// `scan`: asks for consent on the terminal because standard input is a pipe under `curl | sh`.
+	{"internal/cli/tty_unix.go", "os.Open"}:    "opens /dev/tty only to read the user's y/n answers before anything is sent; nothing else is read from it",
+	{"internal/cli/tty_windows.go", "os.Open"}: "opens the console input (CONIN$) only to read the user's y/n answers before anything is sent",
+
 	// VS Code settings: only on `copilot --apply` / `--revert`, with the user's confirmation.
 	{"internal/vscodecfg/settings.go", "os.Stat"}:     "looks for the VS Code user directory that holds settings.json",
 	{"internal/vscodecfg/settings.go", "os.ReadFile"}: "reads settings.json to add the Copilot telemetry keys, backed up first; reverted by --revert",
@@ -76,7 +80,9 @@ var allowed = map[use]string{
 	{"internal/selfupdate/restart_windows.go", "exec.Command"}:   "starts the updated agent on Windows",
 	{"internal/cli/stop_windows.go", "exec.Command"}:             "schtasks and taskkill to stop the agent on Windows",
 
-	// Network: the three server calls and nothing else.
+	// Network: the server calls and nothing else.
+	{"internal/scan/send.go", "http.NewRequestWithContext"}: "`scan`: one POST of the card numbers to /api/v1/cards/drafts, only after the user confirmed the exact body",
+
 	{"internal/uploader/uploader.go", "http.NewRequestWithContext"}:     "POST usage numbers to /api/v1/ingest",
 	{"internal/remoteconfig/client.go", "http.NewRequestWithContext"}:   "GET the signed configuration from /api/v1/agent-config",
 	{"internal/selfupdate/selfupdate.go", "http.NewRequestWithContext"}: "GET the signed release notice and the release package",

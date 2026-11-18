@@ -64,6 +64,10 @@ Bir ingest isteği şu biçimdedir (kısaltılmış; tam şema [contracts/ingest
 
 Proje kimliği hakkında: git deposunda `owner/repo` ve deponun içindeki klasördür (`apps/web`). Git dışında, ev klasörünüzün `~` ile değiştirildiği çalışma klasörüdür (ör. `~/work/client-app`). Ev klasörünüzün dışındaki bir klasör olduğu gibi gönderilir; bu yüzden böyle yollarda hassas isimlerden kaçının veya yöneticinizle nasıl ele alınacağını konuşun.
 
+## Tek seferlik tarama ve paylaşılabilir kart
+
+`harnext-agent scan` (veya `curl -fsSL app.harnext.ai/scan.sh | sh`) aynı yerel dosyaların son 30 gününü okur, hiçbir şey kurmaz, diske hiçbir şey yazmaz ve kendiliğinden hiçbir şey göndermez: ekrana bir özet yazar. Yalnızca evet derseniz göndereceği JSON'u (model başına token toplamları, oturum ve aktif gün sayıları; proje adları yalnızca ayrıca evet derseniz; şema: [contracts/card.v1.schema.json](../contracts/card.v1.schema.json)) birebir yazar ve bir kez daha sorar. Sunucu bunu 24 saat geçerli, size özel bir bağlantının arkasında taslak olarak tutar. Siz yayınlamadan hiçbir şey herkese açık olmaz: koltuk fiyatınızı girer, proje adlarının gösterilip gösterilmeyeceğini seçer (gösterilmezse kartlardan silinir) ve onaylarsınız. Yayınlanan kart kendi bağlantısında herkese açıktır ve yayınlarken bir kez gösterilen silme bağlantısıyla silene kadar kalır (hesap yoktur: o bağlantıyı saklayın). Bağlantılar rastgeledir ve yalnızca SHA-256 özetleri saklanır. Ağ adresleri oldukları gibi saklanmaz: sınırlama için anahtarlı bir özet tutulur ve iki saat sonra silinir. Kart token sayılarını ve güncel liste fiyatlarıyla bir tahmini gösterir; kullanıcı beyanı ve doğrulanmamış olarak işaretlidir, arama motorlarından dizinlememesi istenir.
+
 ## Asla gönderilmeyenler
 
 Prompt'lar ve yanıtlar, AI'ın akıl yürütmesi, araç girdi ve çıktıları (komutlar, dosya içerikleri, hata metinleri), kaynak kod, dosya adları, ev klasörünüz içindeki tam yollar, kullanıcı adınız ve bilgisayar adınız, branch adları, git kimlik bilgileri, ortam değişkenleri, e-posta adresiniz (agent payload'unda e-posta alanı yoktur), ekran görüntüleri.
