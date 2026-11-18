@@ -9,7 +9,13 @@ import (
 	"testing"
 )
 
-const ours = "/home/u/.harnext/copilot-otel.jsonl"
+// An absolute path on every OS; Apply keeps an existing outfile only if it is absolute for the host.
+var ours = func() string {
+	if runtime.GOOS == "windows" {
+		return "C:/home/u/.harnext/copilot-otel.jsonl"
+	}
+	return "/home/u/.harnext/copilot-otel.jsonl"
+}()
 
 func doc(text string) Doc {
 	return Doc{Path: "settings.json", Exists: true, Raw: []byte(text), Text: text, Mode: 0o644}

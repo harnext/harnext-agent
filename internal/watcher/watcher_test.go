@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -289,6 +290,9 @@ func TestTruncateRereadsWithoutDoubleCounting(t *testing.T) {
 }
 
 func TestReplacedFileIsReadFromStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no file identity on Windows (platformFileID): a replaced file is detected by size only")
+	}
 	h := newHarness(t)
 	p := h.path("s1.jsonl")
 	write(t, p, asstLine("a1", 10)+asstLine("a2", 20))
@@ -515,6 +519,9 @@ func TestRestartDoesNotRecount(t *testing.T) {
 }
 
 func TestErrorsDoNotLeakPathsOrContent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 does not make a file unreadable on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("permission checks do not apply to root")
 	}

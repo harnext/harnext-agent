@@ -238,6 +238,9 @@ func TestServiceInstallRequiresInit(t *testing.T) {
 }
 
 func TestServiceInstallAndUninstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("installs a systemd unit with a Unix binary path; runs on macOS and Linux")
+	}
 	p := newPaths(t)
 	exec(t, p, tok+"\n", "init", "--token-stdin", "--server", "https://app.example.com")
 	var calls []string

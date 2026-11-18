@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,9 @@ func firstArg(a []string) string {
 
 func opts(t *testing.T, goos string) Options {
 	t.Helper()
+	if goos != "windows" && runtime.GOOS == "windows" {
+		t.Skip("launchd and systemd files are rendered with Unix path rules; they run on macOS and Linux")
+	}
 	run, _ := recorder(nil)
 	return Options{GOOS: goos, Exe: "/Applications/Harnext Agent/harnext-agent", UserHome: t.TempDir(), UID: 501, Run: run}
 }
