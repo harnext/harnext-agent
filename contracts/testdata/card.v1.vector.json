@@ -1,0 +1,50 @@
+{
+  "payload_version": 1,
+  "agent_version": "0.3.0",
+  "period": {
+    "from": "2026-10-20",
+    "to": "2026-11-18"
+  },
+  "active_days": 18,
+  "sessions": 42,
+  "usage": [
+    {
+      "tool_name": "claude_code",
+      "model": "claude-sonnet-4",
+      "speed": "standard",
+      "prompt_floor": 0,
+      "input_tokens": 120000,
+      "output_tokens": 450000,
+      "cache_read_tokens": 9800000,
+      "cache_creation_tokens": 640000,
+      "cache_creation_1h_tokens": 0,
+      "web_search_requests": 3,
+      "web_fetch_requests": 1
+    },
+    {
+      "tool_name": "vscode_copilot",
+      "model": "gpt-4.1",
+      "speed": "unknown",
+      "prompt_floor": -1,
+      "input_tokens": 310000,
+      "output_tokens": 95000,
+      "cache_read_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_creation_1h_tokens": 0,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "copilot_credits": 12.5,
+      "tokens_estimated": true
+    }
+  ],
+  "folders": [
+    {
+      "project": "acme/app",
+      "total_tokens": 8200000
+    },
+    {
+      "project": "acme/docs",
+      "total_tokens": 1900000
+    }
+  ]
+}
