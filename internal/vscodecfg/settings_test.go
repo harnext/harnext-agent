@@ -135,7 +135,8 @@ func TestApplyIdempotent(t *testing.T) {
 }
 
 func TestApplyEnabledFalseUpdatedInPlace(t *testing.T) {
-	in := "{\n  \"github.copilot.chat.otel.enabled\": false, // keep me\n  \"github.copilot.chat.otel.exporterType\": \"file\",\n  \"github.copilot.chat.otel.outfile\": \"/x/y.jsonl\"\n}\n"
+	custom := filepath.Join(t.TempDir(), "y.jsonl") // absolute on every OS, so Apply keeps it
+	in := "{\n  \"github.copilot.chat.otel.enabled\": false, // keep me\n  \"github.copilot.chat.otel.exporterType\": \"file\",\n  \"github.copilot.chat.otel.outfile\": " + enc(custom) + "\n}\n"
 	out, ch := mustApply(t, doc(in), Want{})
 	if !strings.Contains(out, "true, // keep me") || actions(ch) != "enabled:updated,outfile:kept" {
 		t.Fatalf("%s\n%s", actions(ch), out)
