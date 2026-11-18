@@ -152,7 +152,12 @@ func treeOf(t *testing.T, root string) string {
 			return err
 		}
 		rel, _ := filepath.Rel(root, p)
-		lines = append(lines, fmt.Sprintf("%s|%v|%d|%d", rel, d.IsDir(), info.Size(), info.ModTime().UnixNano()))
+		// NTFS refreshes directory times lazily, so only files carry a time; an added or removed entry still changes the list.
+		mtime := int64(0)
+		if !d.IsDir() {
+			mtime = info.ModTime().UnixNano()
+		}
+		lines = append(lines, fmt.Sprintf("%s|%v|%d|%d", rel, d.IsDir(), info.Size(), mtime))
 		return nil
 	})
 	if err != nil {
