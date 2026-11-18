@@ -25,9 +25,10 @@ import (
 const (
 	ToolClaudeCode = "claude_code"
 
+	// 4: per-session active minutes (SessionState.Active; older states are discarded and transcripts re-read).
 	// 3: requests are split by folder (SessionState.Folders / Open; older states are discarded and transcripts re-read).
 	// 2: per-model totals are keyed by UsageKey.
-	stateVersion = 3
+	stateVersion = 4
 	// maxCounterKinds bounds the Ignored/Skipped maps; extra kinds share OtherKind.
 	maxCounterKinds = 64
 	OtherKind       = "_other"
@@ -115,6 +116,8 @@ type Row struct {
 	Cwd               string
 	GitBranch         string
 	ToolVersion       string
+	// ActiveSeconds is the session's active time (MinuteSet.Seconds), repeated on every row; 0 when no event had a time.
+	ActiveSeconds int64
 
 	// Folder is the folder of the project this usage row belongs to ("" = the project root). Parts lists ALL folders of the
 	// session (sorted by path, repeated on every row) with their request counts and counters; they add up to the
@@ -155,6 +158,8 @@ type Counters struct {
 	UnanalyzedUserTurns  int64 `json:"unanalyzed_user_turns"`
 	DuplicateToolResults int64 `json:"duplicate_tool_results"`
 	ToolUses             int64 `json:"tool_uses"`
+	// ActiveCapReached counts event minutes skipped because a session reached maxActiveMinutes.
+	ActiveCapReached int64 `json:"active_cap_reached,omitempty"`
 
 	Skipped map[string]int64 `json:"skipped"`
 	Ignored map[string]int64 `json:"ignored"`
@@ -189,6 +194,8 @@ type SessionState struct {
 	Open    Request                 `json:"open"`
 	// Analysis is absent in snapshots written before phase 2b; it is created on demand.
 	Analysis *Analysis `json:"analysis,omitempty"`
+	// Active holds the UTC minutes of every timestamped assistant and user event (HRN-08).
+	Active *MinuteSet `json:"active,omitempty"`
 }
 
 // State is the serializable aggregator state. Seen holds 64-bit hashes of response and
@@ -262,13 +269,29 @@ func (a *Aggregator) Add(ev claudecode.Event) {
 	defer a.mu.Unlock()
 	switch e := ev.(type) {
 	case claudecode.AssistantUsage:
+		a.markActive(e.SessionID, e.Timestamp)
 		a.addUsage(e)
 	case claudecode.UserTurn:
+		a.markActive(e.SessionID, e.Timestamp)
 		a.addUser(e)
 	case claudecode.Ignored:
 		bump(a.counters.Ignored, e.Type)
 	case claudecode.Skipped:
 		bump(a.counters.Skipped, string(e.Reason))
+	}
+}
+
+// markActive books the event's minute before any dedup, so a replay refills the set.
+func (a *Aggregator) markActive(sessionID string, ts time.Time) {
+	if ts.IsZero() {
+		return
+	}
+	s := a.session(sessionID)
+	if s.Active == nil {
+		s.Active = &MinuteSet{}
+	}
+	if !s.Active.Add(ts) {
+		a.counters.ActiveCapReached++
 	}
 }
 
@@ -516,6 +539,7 @@ func (a *Aggregator) Rows() []Row {
 			hasUsage[name] = len(f.Usage) > 0
 		}
 		main := mainFolderOf(parts, hasUsage)
+		active := s.Active.Seconds()
 		for name, f := range folders {
 			for key, m := range f.Usage {
 				k, ok := ParseUsageKey(key)
@@ -527,7 +551,7 @@ func (a *Aggregator) Rows() []Row {
 					Day: k.Day, Speed: k.Speed, PromptFloor: k.PromptFloor,
 					Totals: m.Totals, WebSearchRequests: m.WebSearchRequests, WebFetchRequests: m.WebFetchRequests,
 					StartedAt: s.StartedAt, EndedAt: s.EndedAt,
-					Cwd: s.Cwd, GitBranch: s.GitBranch, ToolVersion: s.ToolVersion,
+					Cwd: s.Cwd, GitBranch: s.GitBranch, ToolVersion: s.ToolVersion, ActiveSeconds: active,
 					Folder: name, Parts: parts, MainFolder: main,
 					Topic: topic, Quality: quality, DetectorVersion: detector, SignalCoverage: ClaudeCodeCoverage,
 				}
@@ -692,6 +716,13 @@ func (a *Aggregator) Restore(st State) error {
 	if st.Version != stateVersion {
 		return fmt.Errorf("aggregate: unsupported state version %d", st.Version)
 	}
+	for _, s := range st.Sessions {
+		if s != nil && s.Active != nil {
+			if err := s.Active.check(); err != nil {
+				return err
+			}
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sessions = make(map[string]*SessionState, len(st.Sessions))
@@ -719,6 +750,7 @@ func cloneSession(s *SessionState) *SessionState {
 		an := *s.Analysis
 		c.Analysis = &an
 	}
+	c.Active = s.Active.clone()
 	return &c
 }
 

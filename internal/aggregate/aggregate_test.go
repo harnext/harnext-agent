@@ -434,6 +434,7 @@ func tokensOnly(rows []Row) []Row {
 	for i := range rows {
 		rows[i].Quality, rows[i].SignalCoverage, rows[i].DetectorVersion = analyzer.Quality{}, 0, 0
 		rows[i].Parts, rows[i].MainFolder = nil, ""
+		rows[i].ActiveSeconds = 0 // covered by active_test.go
 	}
 	return rows
 }

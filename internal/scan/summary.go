@@ -14,14 +14,16 @@ import (
 )
 
 const (
-	maxTokens    = 100_000_000_000
-	maxRequests  = 1_000_000_000
-	maxCredits   = 1e9
-	maxModelLen  = 100
-	maxProject   = 128
-	maxSessions  = 1_000_000
-	periodDays   = 30
-	unknownModel = "unknown"
+	maxTokens   = 100_000_000_000
+	maxRequests = 1_000_000_000
+	maxCredits  = 1e9
+	maxModelLen = 100
+	maxProject  = 128
+	maxSessions = 1_000_000
+	// maxActiveSeconds is 30 days of continuous work; a sum above it is clipped.
+	maxActiveSeconds = periodDays * 24 * 3600
+	periodDays       = 30
+	unknownModel     = "unknown"
 )
 
 // UsageGroup is the total of one (tool, model, speed, prompt floor) key over the period.
@@ -62,8 +64,10 @@ type Summary struct {
 	To         string
 	ActiveDays int
 	Sessions   int
-	Usage      []UsageGroup   // largest first
-	Projects   []ProjectTotal // largest first
+	// ActiveSeconds is the active time of the counted sessions, each session once (rows repeat it).
+	ActiveSeconds int64
+	Usage         []UsageGroup   // largest first
+	Projects      []ProjectTotal // largest first
 }
 
 // DefaultResolve resolves a working directory to its project identity the way the agent's uploader does.
@@ -93,6 +97,9 @@ func Build(rows []aggregate.Row, now time.Time, resolve func(cwd string) string)
 			continue
 		}
 		days[r.Day] = struct{}{}
+		if _, seen := sessions[r.Tool+"\x00"+r.SessionID]; !seen {
+			s.ActiveSeconds = min(maxActiveSeconds, s.ActiveSeconds+max(r.ActiveSeconds, 0))
+		}
 		sessions[r.Tool+"\x00"+r.SessionID] = struct{}{}
 
 		k := key{r.Tool, clipModel(r.Model), r.Speed, r.PromptFloor}

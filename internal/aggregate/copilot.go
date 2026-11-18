@@ -17,12 +17,13 @@ const (
 	ToolVSCodeCopilot = "vscode_copilot"
 	copilotSpeed      = "unknown"
 
+	// 6: per-session active minutes (CopilotSessionState.Active; older states are discarded and the files re-read).
 	// 5: requests are split by folder: per-request counters and folders (CopilotRequestState.Q/Dirs), per-trace usage records
 	// and the open exchange (older states are discarded and the files re-read).
 	// 4: cache-creation tokens are counted (OTel cache_creation.input_tokens) and chat requests carry model, time, credits and
 	// token metrics for history rows; older states are discarded and the files re-read.
 	// 3: per-model totals are keyed by UsageKey.
-	copilotStateVersion = 5
+	copilotStateVersion = 6
 	// maxNanoAIU is 1e9 credits, the contract maximum of copilot_credits.
 	maxNanoAIU int64 = 1_000_000_000_000_000_000
 	// maxTracesPerSession bounds the per-session trace hash list (8 bytes each).
@@ -39,6 +40,8 @@ type CopilotCounters struct {
 	DuplicateSpans  int64 `json:"duplicate_spans"`
 	TraceCapReached int64 `json:"trace_cap_reached"`
 	MissingIDs      int64 `json:"missing_ids"`
+	// ActiveCapReached counts event minutes skipped because a session reached maxActiveMinutes.
+	ActiveCapReached int64 `json:"active_cap_reached,omitempty"`
 
 	// Chat session counters.
 	ChatRequests          int64 `json:"chat_requests,omitempty"`
@@ -128,6 +131,8 @@ type CopilotSessionState struct {
 	PreQ       []int64 `json:"pre_q,omitempty"`
 	// TraceUsage lists the counted traces' usage, sorted by hash.
 	TraceUsage []CopilotTraceUsage `json:"trace_usage,omitempty"`
+	// Active holds the UTC minutes of the OTel chat spans (start and end) and of the chat requests (HRN-08).
+	Active *MinuteSet `json:"active,omitempty"`
 }
 
 // CopilotState is the serializable aggregator state. Seen holds sorted 64-bit hashes of (trace, span).
@@ -151,6 +156,7 @@ type copilotSession struct {
 	curIdx             int // cache of the index of curHash in requests (verified before use)
 	preQ               analyzer.Quality
 	traceUsage         map[uint64]*CopilotTraceUsage
+	active             *MinuteSet
 }
 
 // CopilotAggregator folds VS Code Copilot events into per-(conversation, model) totals.
@@ -238,6 +244,21 @@ func (a *CopilotAggregator) session(id string) *copilotSession {
 		a.sessions[id] = s
 	}
 	return s
+}
+
+// markActive books event minutes before any dedup, so a replay refills the set; zero times add nothing.
+func (a *CopilotAggregator) markActive(s *copilotSession, ts ...time.Time) {
+	for _, t := range ts {
+		if t.IsZero() {
+			continue
+		}
+		if s.active == nil {
+			s.active = &MinuteSet{}
+		}
+		if !s.active.Add(t) {
+			a.counters.ActiveCapReached++
+		}
+	}
 }
 
 // SetFolder records the workspace folder of a session; empty or oversized values are ignored.
@@ -454,6 +475,7 @@ func (a *CopilotAggregator) requestAt(s *copilotSession, i int) *CopilotRequestS
 // chatStart handles a request start. A request without an id cannot be deduplicated: it only
 // keeps indexes aligned and is never counted.
 func (a *CopilotAggregator) chatStart(s *copilotSession, e copilotchat.RequestStart) {
+	a.markActive(s, e.Timestamp)
 	var hash uint64
 	if e.RequestID != "" {
 		hash = hashKey('q', e.RequestID, "")
@@ -603,11 +625,13 @@ func (a *CopilotAggregator) addUsage(e copilot.ChatUsage) {
 	}
 	if !a.markSeen(hashKey('p', e.TraceID, e.SpanID)) {
 		a.counters.DuplicateSpans++
+		a.markActive(a.session(e.ConversationID), e.Start, e.End)
 		return
 	}
 	a.counters.UniqueSpans++
 
 	s := a.session(e.ConversationID)
+	a.markActive(s, e.Start, e.End)
 	s.touch(e.Start, e.End, e.ToolVersion)
 
 	// Copilot reports no speed; the request's whole prompt (cache reads included) selects the band.
@@ -746,7 +770,7 @@ func (a *CopilotAggregator) Snapshot() CopilotState {
 			Traces:   make([]uint64, 0, len(s.traces)),
 			Requests: cloneRequests(s.requests), Cwd: s.cwd,
 			ChatStartedAt: s.chatStart, ChatEndedAt: s.chatEnd,
-			CurRequest: s.curHash, PreQ: packQ(s.preQ),
+			CurRequest: s.curHash, PreQ: packQ(s.preQ), Active: s.active.clone(),
 		}
 		for _, t := range s.traceUsage {
 			tc := *t
@@ -794,6 +818,7 @@ func (a *CopilotAggregator) Restore(st CopilotState) error {
 			requests: cloneRequests(s.Requests), cwd: s.Cwd,
 			chatStart: s.ChatStartedAt, chatEnd: s.ChatEndedAt,
 			curHash: s.CurRequest, preQ: unpackQ(s.PreQ), traceUsage: make(map[uint64]*CopilotTraceUsage, len(s.TraceUsage)),
+			active: s.Active.clone(),
 		}
 		for _, t := range s.TraceUsage {
 			tc := t
@@ -854,6 +879,11 @@ func validateCopilotState(st CopilotState, traceCap int) error {
 		if !validPackedQ(s.PreQ) {
 			return fmt.Errorf("aggregate: copilot state: invalid unattributed counters")
 		}
+		if s.Active != nil {
+			if err := s.Active.check(); err != nil {
+				return err
+			}
+		}
 		traces := make(map[uint64]struct{}, len(s.Traces))
 		for _, h := range s.Traces {
 			traces[h] = struct{}{}
@@ -882,7 +912,7 @@ func validateCopilotState(st CopilotState, traceCap int) error {
 	}
 	c := st.Counters
 	if c.UniqueSpans < 0 || c.DuplicateSpans < 0 || c.TraceCapReached < 0 || c.MissingIDs < 0 ||
-		c.ChatRequests < 0 || c.ChatDuplicateRequests < 0 || c.ChatBadIndex < 0 || c.ChatRequestCapReached < 0 {
+		c.ChatRequests < 0 || c.ChatDuplicateRequests < 0 || c.ChatBadIndex < 0 || c.ChatRequestCapReached < 0 || c.ActiveCapReached < 0 {
 		return fmt.Errorf("aggregate: copilot state: negative counter")
 	}
 	for _, m := range []map[string]int64{c.Skipped, c.Ignored, c.ChatSkipped, c.ChatIgnored} {

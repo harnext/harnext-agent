@@ -321,6 +321,9 @@ func TestBuild(t *testing.T) {
 	old := row(aggregate.ToolClaudeCode, "s9", "2026-10-18", "m1", "/p/one", 999, 999)
 	future := row(aggregate.ToolClaudeCode, "s9", "2026-11-19", "m1", "/p/one", 999, 999)
 	abs := row(aggregate.ToolClaudeCode, "s5", "2026-11-12", "", "/leak/Users/bob/proj", 1, 1)
+	// Active time is per session: the rows of a session repeat it, rows outside the period do not count.
+	a.ActiveSeconds, b.ActiveSeconds, c.ActiveSeconds, e.ActiveSeconds, abs.ActiveSeconds = 5400, 5400, 600, 120, 60
+	old.ActiveSeconds, future.ActiveSeconds = 999, 999
 
 	resolve := func(cwd string) string {
 		switch cwd {
@@ -333,8 +336,8 @@ func TestBuild(t *testing.T) {
 	}
 	s := Build([]aggregate.Row{a, b, c, d, e, old, future, abs}, testNow, resolve)
 
-	if s.From != "2026-10-19" || s.To != "2026-11-18" || s.ActiveDays != 3 || s.Sessions != 5 {
-		t.Fatalf("period/days/sessions = %s %s %d %d", s.From, s.To, s.ActiveDays, s.Sessions)
+	if s.From != "2026-10-19" || s.To != "2026-11-18" || s.ActiveDays != 3 || s.Sessions != 5 || s.ActiveSeconds != 6180 {
+		t.Fatalf("period/days/sessions/active = %s %s %d %d %d", s.From, s.To, s.ActiveDays, s.Sessions, s.ActiveSeconds)
 	}
 	by := map[string]UsageGroup{}
 	for _, g := range s.Usage {
@@ -489,7 +492,7 @@ func TestCardPayloadCopilotRules(t *testing.T) {
 func TestRenderGolden(t *testing.T) {
 	credits := 12.5
 	s := Summary{
-		From: "2026-10-19", To: "2026-11-18", ActiveDays: 18, Sessions: 42,
+		From: "2026-10-19", To: "2026-11-18", ActiveDays: 18, Sessions: 42, ActiveSeconds: 42*3600 + 15*60,
 		Usage: []UsageGroup{
 			{Tool: aggregate.ToolClaudeCode, Model: "claude-sonnet-4", Speed: "standard", PromptFloor: -1,
 				InputTokens: 120000, OutputTokens: 450000, CacheReadTokens: 9800000, CacheCreationTokens: 640000},
@@ -506,6 +509,7 @@ func TestRenderGolden(t *testing.T) {
 Period           2026-10-19 .. 2026-11-18
 Active days      18
 Sessions         42
+Active time      42h 15m
 Total tokens     ~11.4M
 Copilot credits  12.5
 
@@ -532,8 +536,23 @@ Top projects
 
 	var empty bytes.Buffer
 	Render(&empty, Build(nil, testNow, nil))
-	if !strings.Contains(empty.String(), "No usage found") {
+	if !strings.Contains(empty.String(), "No usage found") || strings.Contains(empty.String(), "Active time") {
 		t.Errorf("empty render:\n%s", empty.String())
+	}
+
+	// The card sees none of it: the card contract has no active time.
+	if body := mustMarshal(t, s.CardPayload("0.3.0", true)); strings.Contains(string(body), "active_seconds") || strings.Contains(string(body), "active_time") {
+		t.Errorf("card payload carries active time: %s", body)
+	}
+}
+
+func TestRenderActiveTime(t *testing.T) {
+	for secs, want := range map[int64]string{0: "", 59: "Active time      0h 0m", 59 * 60: "Active time      0h 59m", 3600: "Active time      1h 0m", 100*3600 + 59*60 + 59: "Active time      100h 59m"} {
+		var b bytes.Buffer
+		Render(&b, Summary{ActiveSeconds: secs, Projects: []ProjectTotal{}})
+		if has := strings.Contains(b.String(), "Active time"); has != (want != "") || (want != "" && !strings.Contains(b.String(), want+"\n")) {
+			t.Errorf("%d s: render has %q, want %q:\n%s", secs, strings.Split(b.String(), "\n")[3:5], want, b.String())
+		}
 	}
 }
 

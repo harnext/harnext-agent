@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://app.harnext.ai/brand/harnext-logo-white.svg">
+  <img src="https://app.harnext.ai/brand/harnext-logo.svg" alt="harnext" height="32">
+</picture>
+
 # Harnext agent
 
 The Harnext agent runs on a developer's computer and reads the local logs of AI coding tools (Claude Code and VS Code Copilot). It sends token, cost and session-friction counters to [Harnext](https://app.harnext.ai). It never sends prompts, replies or source code.

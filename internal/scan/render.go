@@ -27,6 +27,9 @@ func Render(w io.Writer, s Summary) {
 	line("%-16s %s .. %s", "Period", s.From, s.To)
 	line("%-16s %d", "Active days", s.ActiveDays)
 	line("%-16s %d", "Sessions", s.Sessions)
+	if s.ActiveSeconds > 0 {
+		line("%-16s %dh %dm", "Active time", s.ActiveSeconds/3600, s.ActiveSeconds%3600/60)
+	}
 
 	var total int64
 	var estimated bool

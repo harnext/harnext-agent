@@ -244,6 +244,7 @@ func (a *CopilotAggregator) otelRows(id string, s *copilotSession, quality analy
 		hasUsage[folder] = true
 	}
 	parts, mainOut := partsFor(folders, turns, hasUsage)
+	active := s.active.Seconds()
 
 	var rows []Row
 	for folder, byKey := range usage {
@@ -264,7 +265,7 @@ func (a *CopilotAggregator) otelRows(id string, s *copilotSession, quality analy
 				CopilotCredits: &credits,
 				Totals:         c.Totals,
 				Folder:         folder, Parts: parts, MainFolder: mainOut,
-				StartedAt: s.startedAt, EndedAt: s.endedAt,
+				StartedAt: s.startedAt, EndedAt: s.endedAt, ActiveSeconds: active,
 				Cwd: s.cwd, ToolVersion: s.toolVersion, Topic: topic,
 				Quality: quality, DetectorVersion: detector, SignalCoverage: CopilotCoverage,
 			})
@@ -343,6 +344,7 @@ func (a *CopilotAggregator) historyRows(id string, s *copilotSession, quality an
 		ensureFolder(folders, g.folder)
 	}
 	parts, mainOut := partsFor(folders, turns, hasUsage)
+	active := s.active.Seconds()
 	end := s.chatEnd
 	if end.Before(s.chatStart) {
 		end = s.chatStart
@@ -357,7 +359,7 @@ func (a *CopilotAggregator) historyRows(id string, s *copilotSession, quality an
 			Totals: Totals{InputTokens: g.est.Input, OutputTokens: g.est.Output, CacheReadTokens: g.est.CacheRead,
 				CacheCreationTokens: g.est.CacheCreation},
 			Folder: g.folder, Parts: parts, MainFolder: mainOut,
-			StartedAt: s.chatStart, EndedAt: end,
+			StartedAt: s.chatStart, EndedAt: end, ActiveSeconds: active,
 			Cwd: s.cwd, Topic: topic,
 			Quality: quality, DetectorVersion: detector, SignalCoverage: CopilotCoverage,
 		})

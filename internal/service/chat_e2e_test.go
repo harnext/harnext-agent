@@ -389,6 +389,46 @@ func TestRestoreCopilotDropsChatOffsets(t *testing.T) {
 	}
 }
 
+// States saved before the active-minutes bump (Claude 3, Copilot 5) cannot be trusted: they are discarded and the files are read
+// again from offset 0, once. The next snapshot carries the new versions.
+func TestStatesBeforeActiveMinutesAreDiscardedAndReread(t *testing.T) {
+	db, _ := openDB(t)
+	o, _ := LoadOffsets(db)
+	root := filepath.Join(os.TempDir(), "ws-root")
+	chatFile := filepath.Join(root, "h", "chatSessions", "s.jsonl")
+	const cop = "/x/cop.jsonl"
+	for _, p := range []string{"/x/claude.jsonl", cop, chatFile} {
+		_ = o.Set(p, watcher.FileState{Offset: 9})
+	}
+	_ = db.SaveState(stateName, []byte(`{"version":3,"sessions":{},"seen":[],"counters":{"skipped":{},"ignored":{}}}`))
+	_ = db.SaveState(copilotStateName, []byte(`{"version":5,"sessions":{},"seen":[],"counters":{"skipped":{},"ignored":{}}}`))
+	logf := func(string, ...any) {}
+
+	claude, err := restoreAggregator(db, o, logf)
+	if err != nil || claude.Snapshot().Version != 4 {
+		t.Fatalf("claude: err=%v version=%d", err, claude.Snapshot().Version)
+	}
+	if len(o.Paths()) != 0 {
+		t.Fatalf("offsets kept after a version 3 state: %v", o.Paths())
+	}
+	_ = o.Set("/x/claude.jsonl", watcher.FileState{Offset: 9})
+	_ = o.Set(cop, watcher.FileState{Offset: 9})
+	_ = o.Set(chatFile, watcher.FileState{Offset: 9})
+	cp, err := restoreCopilot(db, o, cop, logf, root)
+	if err != nil || cp.Snapshot().Version != 6 {
+		t.Fatalf("copilot: err=%v version=%d", err, cp.Snapshot().Version)
+	}
+	if _, ok := o.Get(cop); ok {
+		t.Fatal("copilot offset kept after a version 5 state")
+	}
+	if _, ok := o.Get(chatFile); ok {
+		t.Fatal("chat offset kept after a version 5 state")
+	}
+	if _, ok := o.Get("/x/claude.jsonl"); !ok {
+		t.Fatal("restoreCopilot touched a claude offset")
+	}
+}
+
 // inputOf sums input tokens over a wire session's usage rows (payload v4).
 func inputOf(s map[string]any) int64 {
 	var n int64

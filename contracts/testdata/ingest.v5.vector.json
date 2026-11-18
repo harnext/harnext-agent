@@ -40,6 +40,7 @@
       "turn_count": 10,
       "started_at": "2026-11-01T10:00:00Z",
       "ended_at": "2026-11-01T11:00:00Z",
+      "active_seconds": 3000,
       "usage": [
         {
           "model": "claude-sonnet-4",

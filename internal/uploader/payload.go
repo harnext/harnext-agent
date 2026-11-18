@@ -31,6 +31,9 @@ const (
 	maxTurnCount       = 1_000_000
 	maxCopilotCredits  = 1e9
 	maxSessionDuration = 90 * 24 * time.Hour
+	// maxActiveSeconds and activeSlack are the server's limits on active_seconds (the value may exceed the session span by slack).
+	maxActiveSeconds   = 7 * 24 * 60 * 60
+	activeSlack        = 3600
 	maxSessionIDLen    = 200
 	maxModelLen        = 100
 	maxFolderLen       = 512
@@ -59,6 +62,8 @@ type session struct {
 	TurnCount         int64       `json:"turn_count"`
 	StartedAt         string      `json:"started_at"`
 	EndedAt           string      `json:"ended_at"`
+	// ActiveSeconds is omitted when the session has no timed event; 0 is never sent.
+	ActiveSeconds int64 `json:"active_seconds,omitempty"`
 	// Usage is the session total (the sum of the folders' usage per key); Folders carries the split.
 	Usage   []usageRow `json:"usage"`
 	Folders []folder   `json:"folders"`
@@ -246,6 +251,7 @@ func toSession(rows []aggregate.Row) (session, bool) {
 	}
 	s.StartedAt = r.StartedAt.UTC().Format(time.RFC3339Nano)
 	s.EndedAt = r.EndedAt.UTC().Format(time.RFC3339Nano)
+	s.ActiveSeconds = max(0, min(r.ActiveSeconds, maxActiveSeconds, int64(r.EndedAt.Sub(r.StartedAt)/time.Second)+activeSlack))
 
 	// Folders in the order of Parts (sorted by path); every folder of the session is sent, even one without usage.
 	byPath := make(map[string]int, len(r.Parts))

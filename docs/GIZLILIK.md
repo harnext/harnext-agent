@@ -33,7 +33,7 @@ Yalnızca kendi Harnext sunucunuza, HTTPS üzerinden ve agent token'ınızla:
 
 | İstek | Ne taşır |
 |---|---|
-| `POST /api/v1/ingest` | Oturum başına: araç, proje kimliği, konu etiketi, sayaçlar, model ve gün başına token sayıları, zamanlar ve klasör kırılımı (aşağıya bakın) |
+| `POST /api/v1/ingest` | Oturum başına: araç, proje kimliği, konu etiketi, sayaçlar, model ve gün başına token sayıları, zamanlar, oturumun aktif süresi (saniye, `active_seconds`) ve klasör kırılımı (aşağıya bakın) |
 | `GET /api/v1/agent-config` | Token ve agent sürümü dışında sizinle ilgili bir şey yok. Sayaçları hesaplamak için kullanılan imzalı kuralları döner |
 | `GET /api/v1/agent-release` ve sürüm paketi | Güncelleme kontrolü. Paketler imza ve sha256 ile doğrulanır |
 
@@ -54,6 +54,7 @@ Bir ingest isteği şu biçimdedir (kısaltılmış; tam şema [contracts/ingest
     "turn_count": 10,
     "started_at": "2026-11-01T10:00:00Z",
     "ended_at": "2026-11-01T11:00:00Z",
+    "active_seconds": 3000,
     "usage": [{ "model": "claude-sonnet-4", "day": "2026-11-01", "input_tokens": 2, "output_tokens": 1000, "...": "token sayıları" }],
     "folders": [{ "path": "apps/web", "turn_count": 6, "quality": { "...": "sayaçlar" }, "usage": [] }]
   }]

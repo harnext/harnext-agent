@@ -957,6 +957,7 @@ func TestIngestV5VectorMatchesWire(t *testing.T) {
 	claude := func(folder string, out int64) aggregate.Row {
 		r := row("claude-multi")
 		r.Folder, r.Totals, r.Quality, r.Parts, r.MainFolder = folder, aggregate.Totals{InputTokens: 1, OutputTokens: out}, sessionQ, parts, "apps/web"
+		r.ActiveSeconds = 3000 // the Copilot session below has none: the field is absent there
 		return r
 	}
 	credits := func(c float64) *float64 { return &c }

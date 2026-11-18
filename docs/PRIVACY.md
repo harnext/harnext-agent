@@ -33,7 +33,7 @@ Only to your Harnext server, over HTTPS, with your agent token:
 
 | Request | What it carries |
 |---|---|
-| `POST /api/v1/ingest` | Per session: tool, project identity, topic label, counters, token counts per model and day, timestamps, and a per-folder breakdown (see below) |
+| `POST /api/v1/ingest` | Per session: tool, project identity, topic label, counters, token counts per model and day, timestamps, the session's active time in seconds (`active_seconds`), and a per-folder breakdown (see below) |
 | `GET /api/v1/agent-config` | Nothing about you except the token and the agent version. Returns the signed rules used to compute counters |
 | `GET /api/v1/agent-release` and the release package | Update check. Packages are verified by signature and checksum |
 
@@ -54,6 +54,7 @@ An ingest request has this shape (shortened; the full schema is [contracts/inges
     "turn_count": 10,
     "started_at": "2026-11-01T10:00:00Z",
     "ended_at": "2026-11-01T11:00:00Z",
+    "active_seconds": 3000,
     "usage": [{ "model": "claude-sonnet-4", "day": "2026-11-01", "input_tokens": 2, "output_tokens": 1000, "...": "token counts" }],
     "folders": [{ "path": "apps/web", "turn_count": 6, "quality": { "...": "counters" }, "usage": [] }]
   }]
