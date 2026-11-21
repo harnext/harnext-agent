@@ -68,6 +68,7 @@ type Paths struct {
 	Token        string
 	DB           string
 	RemoteConfig string
+	IdentityFile string
 	Lock         string
 	Status       string
 }
@@ -91,6 +92,7 @@ func PathsIn(dir string) Paths {
 		Token:        filepath.Join(dir, "token"),
 		DB:           filepath.Join(dir, "agent.db"),
 		RemoteConfig: filepath.Join(dir, "agent-config.json"),
+		IdentityFile: filepath.Join(dir, "agent-identity.json"),
 		Lock:         filepath.Join(dir, "agent.lock"),
 		Status:       filepath.Join(dir, "status.json"),
 	}

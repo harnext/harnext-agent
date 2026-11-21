@@ -39,14 +39,25 @@ type ScanProgress interface {
 	File(mtime time.Time)
 }
 
+// ClaudeFile says where a delivered event came from. ConfigDir is the full path of the Claude
+// Code config directory (e.g. ~/.claude-work); it is kept in memory only.
+type ClaudeFile struct {
+	ID        FileID
+	ConfigDir string
+}
+
 // Sink receives every parsed event, including Skipped and Ignored ones.
 // Handle is called synchronously from the watcher and must not call back into it.
 type Sink interface {
-	Handle(file FileID, ev claudecode.Event)
+	Handle(file ClaudeFile, ev claudecode.Event)
 }
 
 type Options struct {
-	Root         string        // transcript root, normally DefaultRoot()
+	// Roots are the fixed transcript roots; ignored when RootsFunc is set.
+	Roots []Root
+	// RootsFunc, if set, is called at the start of every full scan: roots that appear later are
+	// picked up, vanished ones are skipped and keep their stored offsets.
+	RootsFunc    func() []Root
 	Offsets      OffsetStore   // required
 	Sink         Sink          // required
 	ScanInterval time.Duration // full-scan safety net; default DefaultScanInterval
@@ -77,15 +88,22 @@ func DefaultRoot() (string, error) {
 type Watcher struct {
 	opts        Options
 	mu          sync.Mutex // serializes all file processing
+	roots       []Root     // roots of the last scan; guarded by mu
 	*lineReader            // embedded so lineBuf stays reachable as w.lineBuf
 	ready       chan struct{}
 	readyOnce   sync.Once
 }
 
 func New(opts Options) (*Watcher, error) {
-	if opts.Root == "" || opts.Offsets == nil || opts.Sink == nil {
-		return nil, errors.New("watcher: Root, Offsets and Sink are required")
+	if opts.Offsets == nil || opts.Sink == nil || (len(opts.Roots) == 0 && opts.RootsFunc == nil) {
+		return nil, errors.New("watcher: Roots (or RootsFunc), Offsets and Sink are required")
 	}
+	for _, r := range opts.Roots {
+		if r.Dir == "" || r.Projects == "" {
+			return nil, errors.New("watcher: a Root needs Dir and Projects")
+		}
+	}
+	opts.Roots = normalizeRoots(opts.Roots)
 	if opts.ScanInterval <= 0 {
 		opts.ScanInterval = DefaultScanInterval
 	}
@@ -100,36 +118,84 @@ func New(opts Options) (*Watcher, error) {
 // Ready is closed once Run has installed its watches and finished the initial scan.
 func (w *Watcher) Ready() <-chan struct{} { return w.ready }
 
-// ScanOnce walks the root, reads new complete lines of every transcript and forgets
-// state of files that no longer exist. It returns an error only if the root is unreadable
-// or ctx ends.
+// ScanOnce walks the roots, reads new complete lines of every transcript and forgets
+// state of files that no longer exist. It returns an error only if a root is unreadable
+// (the other roots are still scanned) or ctx ends.
 func (w *Watcher) ScanOnce(ctx context.Context) error { return w.scanOnce(ctx, nil) }
 
 func (w *Watcher) scanOnce(ctx context.Context, prog ScanProgress) error {
+	return w.scanWith(ctx, prog, nil)
+}
+
+// scanWith is scanOnce; beforeRead, if set, gets the freshly resolved roots before any file is read.
+func (w *Watcher) scanWith(ctx context.Context, prog ScanProgress, beforeRead func([]Root)) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if _, err := os.Stat(w.opts.Root); err != nil {
-		return sanitize("root", err)
+	w.roots = w.currentRoots()
+	if beforeRead != nil {
+		beforeRead(w.roots)
 	}
 	found := map[string]struct{}{}
-	complete := w.scanTree(ctx, w.opts.Root, found, prog)
+	var files []transcriptFile
+	var complete []Root
+	var rootErr error
+	for _, r := range w.roots {
+		if _, err := os.Stat(r.Projects); err != nil {
+			if rootErr == nil {
+				rootErr = sanitize("root", err)
+			}
+			continue
+		}
+		fl, ok := w.collect(ctx, r.Projects, r.Dir, found)
+		files = append(files, fl...)
+		if ok {
+			complete = append(complete, r)
+		}
+	}
+	// All roots are read together so the newest files of any account come first.
+	w.readNewestFirst(ctx, files, prog)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	// A partial walk cannot tell deleted files from unreadable ones.
-	if complete {
+	if len(complete) > 0 {
 		for _, p := range w.opts.Offsets.Paths() {
-			// The store may be shared with other watchers; only this root's entries are ours.
-			if _, ok := found[p]; !ok && strings.HasPrefix(p, w.opts.Root+string(filepath.Separator)) {
-				w.forget(p)
+			if _, ok := found[p]; ok {
+				continue
+			}
+			// The store may be shared with other watchers; only complete roots' entries are ours.
+			for _, r := range complete {
+				if underDir(p, r.Projects) {
+					w.forget(p)
+					break
+				}
 			}
 		}
 	}
-	return nil
+	return rootErr
 }
 
-// Run follows the root with fsnotify and re-scans periodically until ctx ends.
+func (w *Watcher) currentRoots() []Root {
+	if w.opts.RootsFunc != nil {
+		return normalizeRoots(w.opts.RootsFunc())
+	}
+	return w.opts.Roots
+}
+
+// rootFor returns the root that holds path. w.mu must be held.
+func (w *Watcher) rootFor(path string) (Root, bool) {
+	for _, r := range w.roots {
+		if path == r.Projects || underDir(path, r.Projects) {
+			return r, true
+		}
+	}
+	return Root{}, false
+}
+
+func underDir(path, dir string) bool { return strings.HasPrefix(path, dir+string(filepath.Separator)) }
+
+// Run follows the roots with fsnotify and re-scans periodically until ctx ends.
 func (w *Watcher) Run(ctx context.Context) error {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -141,8 +207,11 @@ func (w *Watcher) Run(ctx context.Context) error {
 	scanFailing := false
 	scan := func(prog ScanProgress) {
 		// Watches first, so files created during the scan are not missed.
-		w.watchTree(fsw, watched, w.opts.Root)
-		err := w.scanOnce(ctx, prog)
+		err := w.scanWith(ctx, prog, func(roots []Root) {
+			for _, r := range roots {
+				w.watchTree(fsw, watched, r.Projects)
+			}
+		})
 		if err != nil && ctx.Err() == nil && !scanFailing && w.opts.OnError != nil {
 			w.opts.OnError(err)
 		}
@@ -197,11 +266,16 @@ func (w *Watcher) handleEvent(ctx context.Context, fsw *fsnotify.Watcher, watche
 			// fsnotify is not recursive; watch first, then scan what was created before the watch.
 			w.watchTree(fsw, watched, path)
 			w.mu.Lock()
-			w.scanTree(ctx, path, nil, nil)
+			if r, ok := w.rootFor(path); ok {
+				files, _ := w.collect(ctx, path, r.Dir, nil)
+				w.readNewestFirst(ctx, files, nil)
+			}
 			w.mu.Unlock()
 		case fi.Mode().IsRegular() && isTranscript(path):
 			w.mu.Lock()
-			w.processFile(ctx, path)
+			if r, ok := w.rootFor(path); ok {
+				w.processFile(ctx, path, r.Dir)
+			}
 			w.mu.Unlock()
 		}
 	}
@@ -227,10 +301,11 @@ func (w *Watcher) watchTree(fsw *fsnotify.Watcher, watched map[string]bool, dir 
 	})
 }
 
-// transcriptFile is a discovered file with its modification time.
+// transcriptFile is a discovered file with its modification time and config directory.
 type transcriptFile struct {
-	path  string
-	mtime time.Time
+	path      string
+	configDir string
+	mtime     time.Time
 }
 
 // newestFirst orders by mtime, newest first; equal times by path so the order is stable.
@@ -241,12 +316,9 @@ func newestFirst(a, b transcriptFile) int {
 	return strings.Compare(a.path, b.path)
 }
 
-// scanTree reads every transcript under dir within MaxFileAge, newest first (LIFO: the
-// history that matters most reaches the aggregator first), and reports whether the walk was
-// complete. found, if non-nil, collects every visited transcript path, old ones included, so
-// their stored offsets are kept. prog, if non-nil, observes the scan.
-func (w *Watcher) scanTree(ctx context.Context, dir string, found map[string]struct{}, prog ScanProgress) bool {
-	files, complete := w.collect(ctx, dir, found)
+// readNewestFirst reads the files within MaxFileAge, newest first (LIFO: the history that
+// matters most reaches the aggregator first). prog, if non-nil, observes the scan.
+func (w *Watcher) readNewestFirst(ctx context.Context, files []transcriptFile, prog ScanProgress) {
 	if w.opts.MaxFileAge > 0 {
 		files = slices.DeleteFunc(files, func(f transcriptFile) bool { return time.Since(f.mtime) > w.opts.MaxFileAge })
 	}
@@ -256,18 +328,19 @@ func (w *Watcher) scanTree(ctx context.Context, dir string, found map[string]str
 	}
 	for _, f := range files {
 		if ctx.Err() != nil {
-			return false
+			return
 		}
-		w.processFile(ctx, f.path)
+		w.processFile(ctx, f.path, f.configDir)
 		if prog != nil {
 			prog.File(f.mtime)
 		}
 	}
-	return complete
 }
 
-// collect walks dir and lists its transcripts without reading them.
-func (w *Watcher) collect(ctx context.Context, dir string, found map[string]struct{}) (files []transcriptFile, complete bool) {
+// collect walks dir and lists its transcripts without reading them, and reports whether the walk
+// was complete. found, if non-nil, collects every visited transcript path, old ones included, so
+// their stored offsets are kept.
+func (w *Watcher) collect(ctx context.Context, dir, configDir string, found map[string]struct{}) (files []transcriptFile, complete bool) {
 	complete = true
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
@@ -293,7 +366,7 @@ func (w *Watcher) collect(ctx context.Context, dir string, found map[string]stru
 				w.report("stat", err)
 				return nil
 			}
-			files = append(files, transcriptFile{path: path, mtime: info.ModTime()})
+			files = append(files, transcriptFile{path: path, configDir: configDir, mtime: info.ModTime()})
 		}
 		return nil
 	})
@@ -301,7 +374,7 @@ func (w *Watcher) collect(ctx context.Context, dir string, found map[string]stru
 }
 
 // processFile reads the complete lines appended since the stored offset. w.mu must be held.
-func (w *Watcher) processFile(ctx context.Context, path string) {
+func (w *Watcher) processFile(ctx context.Context, path, configDir string) {
 	if g := w.opts.Gate; g != nil {
 		g.RLock()
 		defer g.RUnlock()
@@ -313,7 +386,7 @@ func (w *Watcher) processFile(ctx context.Context, path string) {
 		} else {
 			ev = w.opts.Parser.ParseLine(line)
 		}
-		w.opts.Sink.Handle(id, ev)
+		w.opts.Sink.Handle(ClaudeFile{ID: id, ConfigDir: configDir}, ev)
 	})
 }
 

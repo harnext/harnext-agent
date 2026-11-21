@@ -18,10 +18,11 @@ import (
 // Limits of the ingest contract (contracts/ingest.v1.schema.json plus the rules JSON Schema
 // cannot express); rows outside them are never sent.
 const (
+	// 6: required per-session account_hash (64 lowercase hex of the tool account); the server routes the session to a workspace by it.
 	// 5: required folders[]: the session-level turn_count, quality and
 	// usage are the sums over the folders and the server checks it. 4: one entry per session with a usage list (model × UTC day ×
 	// speed × prompt floor); money is never sent or stored. 3: session quality counters.
-	PayloadVersion     = 5
+	PayloadVersion     = 6
 	MaxSessionsPerPost = 200
 	maxUsageRows       = 400
 	maxFoldersPerSess  = 64
@@ -55,6 +56,7 @@ var topics = map[string]bool{
 type session struct {
 	SessionExternalID string      `json:"session_external_id"`
 	ToolName          string      `json:"tool_name"`
+	AccountHash       string      `json:"account_hash"`
 	Project           string      `json:"project"`
 	ProjectPath       *string     `json:"project_path,omitempty"`
 	Topic             string      `json:"topic"`
@@ -314,18 +316,17 @@ func toSession(rows []aggregate.Row) (session, bool) {
 	return s, true
 }
 
-// dropBeforeDay removes the rows of days before day (YYYY-MM-DD strings compare in date order); empty day keeps everything.
-func dropBeforeDay(rows []aggregate.Row, day string) []aggregate.Row {
-	if day == "" {
-		return rows
+// validAccountHash: 64 lowercase hex characters.
+func validAccountHash(h string) bool {
+	if len(h) != 64 {
+		return false
 	}
-	out := make([]aggregate.Row, 0, len(rows))
-	for _, r := range rows {
-		if r.Day >= day {
-			out = append(out, r)
+	for i := 0; i < len(h); i++ {
+		if c := h[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
 		}
 	}
-	return out
+	return true
 }
 
 // groupRows collects rows by session (tool and id) in order of first appearance.
@@ -345,17 +346,27 @@ func groupRows(rows []aggregate.Row) [][]aggregate.Row {
 	return out
 }
 
-// prepare returns the valid sessions in order of first appearance and the number of sessions
-// dropped as invalid. The digest covers configVersion too, so sessions are re-sent when the
-// configuration that produced their counters changes.
-func prepare(rows []aggregate.Row, configVersion int64) (out []prepared, invalid int) {
+// prepare returns the valid sessions in order of first appearance, the number of sessions dropped as invalid and the number
+// the gate held back. The gate decides once per session on its first row; its AccountHash goes into the body and its RouteID
+// into the ledger key, so a session routed elsewhere is sent again. The digest covers configVersion too, so sessions are
+// re-sent when the configuration that produced their counters changes. A nil gate sends nothing.
+func prepare(rows []aggregate.Row, configVersion int64, gate func(aggregate.Row) Decision) (out []prepared, invalid, skipped int) {
 	for _, group := range groupRows(rows) {
 		r := group[0]
+		var d Decision
+		if gate != nil {
+			d = gate(r)
+		}
+		if !d.Send {
+			skipped++
+			continue
+		}
 		s, ok := toSession(group)
-		if !ok {
+		if !ok || !validAccountHash(d.AccountHash) {
 			invalid++
 			continue
 		}
+		s.AccountHash = d.AccountHash
 		body, err := json.Marshal(s)
 		if err != nil {
 			invalid++
@@ -366,7 +377,7 @@ func prepare(rows []aggregate.Row, configVersion int64) (out []prepared, invalid
 		var v [8]byte
 		binary.BigEndian.PutUint64(v[:], uint64(max(configVersion, 0)))
 		h.Write(v[:])
-		out = append(out, prepared{key: rowKey(r), digest: hex.EncodeToString(h.Sum(nil)[:16]), body: body})
+		out = append(out, prepared{key: rowKey(r) + "\x00" + d.RouteID, digest: hex.EncodeToString(h.Sum(nil)[:16]), body: body})
 	}
-	return out, invalid
+	return out, invalid, skipped
 }

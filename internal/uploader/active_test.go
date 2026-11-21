@@ -29,7 +29,7 @@ func TestActiveSecondsOnTheWire(t *testing.T) {
 			if !ok || s.ActiveSeconds != tc.want {
 				t.Fatalf("ok=%v ActiveSeconds=%d, want %d", ok, s.ActiveSeconds, tc.want)
 			}
-			p, invalid := prepare([]aggregate.Row{r}, 0)
+			p, invalid, _ := prepare([]aggregate.Row{r}, 0, testGate)
 			if invalid != 0 || len(p) != 1 {
 				t.Fatalf("prepared=%d invalid=%d", len(p), invalid)
 			}
@@ -66,7 +66,7 @@ func TestActiveSecondsChangesTheDigest(t *testing.T) {
 	digest := func(active int64) string {
 		r := row("a")
 		r.ActiveSeconds = active
-		p, _ := prepare([]aggregate.Row{r}, 3)
+		p, _, _ := prepare([]aggregate.Row{r}, 3, testGate)
 		return p[0].digest
 	}
 	if digest(0) == digest(600) || digest(600) == digest(601) {

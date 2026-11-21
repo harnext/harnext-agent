@@ -25,7 +25,7 @@ func TestPreviewIsExactlyWhatSyncSends(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := Preview(rows, PreviewOptions{AgentVersion: "0.1.0", ConfigVersion: 7})
+	p := Preview(rows, PreviewOptions{AgentVersion: "0.1.0", ConfigVersion: 7, Gate: testGate})
 	if string(p.Body) != string(sent) || p.Sessions != 2 || p.Total != 2 || p.Invalid != 0 {
 		t.Fatalf("preview differs from the upload:\n%s\n%s\n%+v", p.Body, sent, p)
 	}
@@ -36,7 +36,7 @@ func TestPreviewLimitsToTheNewestSessions(t *testing.T) {
 	old.EndedAt = old.EndedAt.AddDate(0, 0, -1)
 	old.StartedAt = old.StartedAt.AddDate(0, 0, -1)
 
-	p := Preview([]aggregate.Row{old, newer}, PreviewOptions{AgentVersion: "0.1.0", MaxSessions: 1})
+	p := Preview([]aggregate.Row{old, newer}, PreviewOptions{AgentVersion: "0.1.0", MaxSessions: 1, Gate: testGate})
 	if p.Sessions != 1 || p.Total != 2 {
 		t.Fatalf("preview = %+v", p)
 	}
@@ -48,9 +48,22 @@ func TestPreviewLimitsToTheNewestSessions(t *testing.T) {
 func TestPreviewCountsInvalidSessionsAndSendsNothingForThem(t *testing.T) {
 	bad := row("bad")
 	bad.Model = ""
-	p := Preview([]aggregate.Row{bad}, PreviewOptions{AgentVersion: "0.1.0"})
+	p := Preview([]aggregate.Row{bad}, PreviewOptions{AgentVersion: "0.1.0", Gate: testGate})
 	if p.Invalid != 1 || p.Total != 0 || p.Sessions != 0 || contains(p.Body, "bad") {
 		t.Fatalf("preview = %+v body=%s", p, p.Body)
+	}
+}
+
+// Without a gate, or when the gate says no, the preview shows nothing: that is what would be sent.
+func TestPreviewShowsNothingThePolicyKeepsBack(t *testing.T) {
+	for name, gate := range map[string]func(aggregate.Row) Decision{
+		"nil gate": nil,
+		"closed":   func(aggregate.Row) Decision { return Decision{Reason: "no_account"} },
+	} {
+		p := Preview([]aggregate.Row{row("a")}, PreviewOptions{AgentVersion: "0.1.0", Gate: gate})
+		if p.Total != 0 || p.Sessions != 0 || p.Invalid != 0 || contains(p.Body, "session_external_id") {
+			t.Fatalf("%s: preview = %+v body=%s", name, p, p.Body)
+		}
 	}
 }
 

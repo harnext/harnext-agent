@@ -6,7 +6,7 @@ import "github.com/harnext/harnext-agent/internal/aggregate"
 type PreviewOptions struct {
 	AgentVersion  string
 	ConfigVersion int64
-	NotBeforeDay  string // same meaning as Options.NotBeforeDay
+	Gate          func(aggregate.Row) Decision // same meaning as Options.Gate; nil shows nothing
 	// MaxSessions limits the sessions in the body, newest first; 0 or less shows all of them.
 	MaxSessions int
 }
@@ -21,7 +21,7 @@ type PreviewResult struct {
 
 // Preview builds the ingest body for the newest valid sessions without contacting the server or the ledger.
 func Preview(rows []aggregate.Row, o PreviewOptions) PreviewResult {
-	valid, invalid := prepare(newestSessionsFirst(dropBeforeDay(rows, o.NotBeforeDay)), o.ConfigVersion)
+	valid, invalid, _ := prepare(newestSessionsFirst(rows), o.ConfigVersion, o.Gate)
 	res := PreviewResult{Total: len(valid), Invalid: invalid}
 	if o.MaxSessions > 0 && len(valid) > o.MaxSessions {
 		valid = valid[:o.MaxSessions]

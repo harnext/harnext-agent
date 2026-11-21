@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestPreviewPrintsTheUploadBodyAndChangesNothing(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.out), &body); err != nil {
 		t.Fatalf("stdout is not one JSON document: %v\n%s", err, r.out)
 	}
-	if body.PayloadVersion != 5 || body.AgentVersion != "9.9.9" || len(body.Sessions) != 2 {
+	if body.PayloadVersion != 6 || body.AgentVersion != "9.9.9" || len(body.Sessions) != 2 {
 		t.Fatalf("body = %+v", body)
 	}
 	if !strings.Contains(r.err, "Showing 2 of 2 sessions") || !strings.Contains(r.err, "Nothing was sent") {
@@ -68,13 +69,15 @@ func TestPreviewPrintsTheUploadBodyAndChangesNothing(t *testing.T) {
 		t.Fatalf("stderr = %q", r.err)
 	}
 
-	// Looking never writes: the token epoch is not stored by the preview.
-	db, err = storage.Open(p.DB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, ok, _ := db.LoadState("token_epoch"); ok {
-		t.Fatal("preview stored the token epoch")
+	// Without a test gate the production gate applies; this build has no trusted keys, so no session can be attributed.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	var out, errb bytes.Buffer
+	root := New(Env{Paths: p, Version: "9.9.9", In: strings.NewReader(""), Out: &out, Err: &errb})
+	root.SetArgs([]string{"preview"})
+	if err := root.Execute(); err != nil || out.String() != "" ||
+		!strings.Contains(errb.String(), "Nothing would be sent right now") || !strings.Contains(errb.String(), "no trusted keys") {
+		t.Fatalf("production gate: out=%q err=%q failure=%v", out.String(), errb.String(), err)
 	}
 }

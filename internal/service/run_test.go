@@ -15,10 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/harnext/harnext-agent/internal/account"
 	"github.com/harnext/harnext-agent/internal/aggregate"
 	"github.com/harnext/harnext-agent/internal/remoteconfig"
 	"github.com/harnext/harnext-agent/internal/selfupdate"
 	"github.com/harnext/harnext-agent/internal/storage"
+	"github.com/harnext/harnext-agent/internal/uploader"
 	"github.com/harnext/harnext-agent/internal/watcher"
 )
 
@@ -101,7 +103,7 @@ func (h *harness) start(t *testing.T) (stop func() error) {
 		result error
 	)
 	go func() {
-		done <- Run(ctx, RunOptions{
+		done <- Run(ctx, RunOptions{Gate: testGate,
 			Paths: h.paths, Version: "0.1.0", Root: h.root, ChatRoots: []string{filepath.Join(h.root, "chat")},
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond,
 			Keys: remoteconfig.TrustedKeys{},
@@ -320,7 +322,7 @@ func TestRunSendsConfigVersion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{Paths: p, Version: "0.1.0", Root: root, ChatRoots: []string{filepath.Join(root, "chat")}, FlushInterval: 30 * time.Millisecond,
+		done <- Run(ctx, RunOptions{Gate: testGate, Paths: p, Version: "0.1.0", Root: root, ChatRoots: []string{filepath.Join(root, "chat")}, FlushInterval: 30 * time.Millisecond,
 			UploadPeriod: 50 * time.Millisecond, Keys: keys, Clock: frozenClock{at}})
 	}()
 	eventually(t, "upload with config_version", func() bool {
@@ -411,7 +413,7 @@ func TestConfigArrivingLateRereadsHistoryWithAnalysis(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{Paths: p, Version: "0.1.0", Root: root, ChatRoots: []string{filepath.Join(root, "chat")}, FlushInterval: 30 * time.Millisecond,
+		done <- Run(ctx, RunOptions{Gate: testGate, Paths: p, Version: "0.1.0", Root: root, ChatRoots: []string{filepath.Join(root, "chat")}, FlushInterval: 30 * time.Millisecond,
 			UploadPeriod: 50 * time.Millisecond, Keys: keys, Clock: frozenClock{at}, ConfigGrace: 30 * time.Millisecond})
 	}()
 	has := func(sub string) bool {
@@ -442,7 +444,7 @@ func TestRunRestartsAfterAnUpdate(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{
+		done <- Run(ctx, RunOptions{Gate: testGate,
 			Paths: h.paths, Version: "0.2.1", Root: h.root, ChatRoots: []string{filepath.Join(h.root, "chat")},
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, Keys: remoteconfig.TrustedKeys{},
 			UpdateFirstDelay: 20 * time.Millisecond, UpdateInterval: 20 * time.Millisecond,
@@ -490,12 +492,73 @@ func TestRunWithoutUpdateCheckNeverAsksTheServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{Paths: p, Version: "0.2.1", Root: root, ChatRoots: []string{filepath.Join(root, "chat")},
+		done <- Run(ctx, RunOptions{Gate: testGate, Paths: p, Version: "0.2.1", Root: root, ChatRoots: []string{filepath.Join(root, "chat")},
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, Keys: keys, UpdateFirstDelay: 10 * time.Millisecond})
 	}()
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 	if err := <-done; err != nil || asked != 0 {
 		t.Fatalf("err %v, asked %d", err, asked)
+	}
+}
+
+// testGate sends every session as one fixed account to one fixed route; the production default is fail-closed.
+func testGate(aggregate.Row) uploader.Decision {
+	return uploader.Decision{Send: true, AccountHash: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", RouteID: "route-a"}
+}
+
+// The sink tags the session with the digest of its config directory (here the parent of Root) and the gate sees it with FirstAt.
+func TestGateReceivesSourceAndFirstAt(t *testing.T) {
+	h := newHarness(t)
+	appendFile(t, filepath.Join(h.root, "proj", "s1.jsonl"), assistant("m1", 100))
+	var mu sync.Mutex
+	var seen []aggregate.Row
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, RunOptions{
+			Paths: h.paths, Version: "0.1.0", Root: h.root, ChatRoots: []string{filepath.Join(h.root, "chat")},
+			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, Keys: remoteconfig.TrustedKeys{},
+			Gate: func(r aggregate.Row) uploader.Decision {
+				mu.Lock()
+				seen = append(seen, r)
+				mu.Unlock()
+				return testGate(r)
+			},
+		})
+	}()
+	defer func() { cancel(); <-done }()
+	eventually(t, "upload", func() bool { return len(h.rec.all()) >= 1 })
+	mu.Lock()
+	defer mu.Unlock()
+	want := account.DirID(filepath.Dir(h.root))
+	if len(seen) == 0 || seen[0].Source != want || seen[0].FirstAt.IsZero() {
+		t.Fatalf("gate rows = %+v, want Source %s", seen, want)
+	}
+	if !strings.Contains(h.rec.all()[0], `"account_hash":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"`) {
+		t.Fatalf("body lacks account_hash: %s", h.rec.all()[0])
+	}
+}
+
+// Without a Gate (the default until accounts are bound) nothing leaves the machine.
+func TestNilGateSendsNothing(t *testing.T) {
+	h := newHarness(t)
+	appendFile(t, filepath.Join(h.root, "proj", "s1.jsonl"), assistant("m1", 100))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, RunOptions{
+			Paths: h.paths, Version: "0.1.0", Root: h.root, ChatRoots: []string{filepath.Join(h.root, "chat")},
+			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, Keys: remoteconfig.TrustedKeys{},
+		})
+	}()
+	defer func() { cancel(); <-done }()
+	eventually(t, "responses read", func() bool {
+		s, err := h.paths.ReadStatus()
+		return err == nil && s.UniqueResponses == 1
+	})
+	time.Sleep(300 * time.Millisecond)
+	if n := len(h.rec.all()); n != 0 {
+		t.Fatalf("%d uploads with no gate", n)
 	}
 }

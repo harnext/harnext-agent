@@ -253,11 +253,11 @@ func TestClaudeActiveCap(t *testing.T) {
 }
 
 func TestClaudeRestoreDropsOldStateAndBadActive(t *testing.T) {
-	if stateVersion != 4 {
-		t.Fatalf("stateVersion = %d: the active-minutes bump is 4", stateVersion)
+	if stateVersion != 5 {
+		t.Fatalf("stateVersion = %d: the session-origin bump is 5", stateVersion)
 	}
-	if err := New().Restore(State{Version: 3, Sessions: map[string]*SessionState{}}); err == nil {
-		t.Error("a version 3 state (no active minutes) must be discarded")
+	if err := New().Restore(State{Version: 4, Sessions: map[string]*SessionState{}}); err == nil {
+		t.Error("a version 4 state (no session origin) must be discarded")
 	}
 	bad := State{Version: stateVersion, Sessions: map[string]*SessionState{"s": {Active: &MinuteSet{Words: []MinuteWord{{W: 1, B: 0}}}}}}
 	a := New()
@@ -362,4 +362,30 @@ func TestCopilotRestoreDropsOldStateAndBadActive(t *testing.T) {
 	if err := NewCopilot().Restore(st); err == nil {
 		t.Error("an unsorted minute set was accepted")
 	}
+}
+
+// Source is the first non-empty one of a session, FirstAt its earliest event; both survive a snapshot and a replay.
+func TestAddFromRecordsSourceAndFirstAt(t *testing.T) {
+	a := New()
+	a.AddFrom("", claudecode.UserTurn{SessionID: "s", UUID: "u0", Timestamp: tm(wordBase+5, 0)})
+	a.AddFrom("0123456789abcdef", claudecode.UserTurn{SessionID: "s", UUID: "u1", Timestamp: tm(wordBase+2, 0)})
+	a.AddFrom("fedcba9876543210", claudecode.UserTurn{SessionID: "s", UUID: "u2", Timestamp: tm(wordBase+9, 0)})
+	a.Add(usage("s", "m", "x", "r", 1, func(e *claudecode.AssistantUsage) { e.Timestamp = tm(wordBase+9, 1) }))
+	check := func(a *Aggregator) {
+		t.Helper()
+		rows := a.Rows()
+		if len(rows) != 1 || rows[0].Source != "0123456789abcdef" || !rows[0].FirstAt.Equal(tm(wordBase+2, 0)) {
+			t.Fatalf("rows = %+v", rows)
+		}
+	}
+	check(a)
+	var st State
+	if err := json.Unmarshal([]byte(mustJSON(t, a.Snapshot())), &st); err != nil {
+		t.Fatal(err)
+	}
+	b := New()
+	if err := b.Restore(st); err != nil {
+		t.Fatal(err)
+	}
+	check(b)
 }

@@ -141,6 +141,22 @@ func (r *Resolver) shorten(p string) string {
 	return filepath.ToSlash(p)
 }
 
+// FindRepo is findRepo for other packages that read git files (internal/gitid).
+func FindRepo(dir string) (root, gitDir string) { return findRepo(dir) }
+
+// CommonDir returns the directory that holds a repository's shared config: the "commondir" target of a worktree's
+// git directory, otherwise gitDir itself.
+func CommonDir(gitDir string) string {
+	if b, err := readSmall(filepath.Join(gitDir, "commondir")); err == nil {
+		common := strings.TrimSpace(string(b))
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitDir, common)
+		}
+		return filepath.Clean(common)
+	}
+	return gitDir
+}
+
 // findRepo walks up from dir to the directory holding .git and returns it with the git directory
 // (following a "gitdir:" file for worktrees and submodules).
 func findRepo(dir string) (root, gitDir string) {
@@ -183,13 +199,7 @@ func readGitFile(path, base string) string {
 // remoteURL reads the "origin" remote (or the first remote) from the repository config. A worktree's
 // git directory points to the main one through its "commondir" file.
 func remoteURL(gitDir string) string {
-	if b, err := readSmall(filepath.Join(gitDir, "commondir")); err == nil {
-		common := strings.TrimSpace(string(b))
-		if !filepath.IsAbs(common) {
-			common = filepath.Join(gitDir, common)
-		}
-		gitDir = filepath.Clean(common)
-	}
+	gitDir = CommonDir(gitDir)
 	b, err := readSmall(filepath.Join(gitDir, "config"))
 	if err != nil {
 		return ""

@@ -16,9 +16,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/harnext/harnext-agent/internal/aggregate"
 	"github.com/harnext/harnext-agent/internal/selfupdate"
 	"github.com/harnext/harnext-agent/internal/service"
+	"github.com/harnext/harnext-agent/internal/storage"
 	"github.com/harnext/harnext-agent/internal/svcmgr"
+	"github.com/harnext/harnext-agent/internal/uploader"
 )
 
 // Env carries everything the commands need, so tests can substitute it.
@@ -32,6 +35,11 @@ type Env struct {
 	ServerDefault string
 	// ServiceOptions overrides the service manager options; for tests.
 	ServiceOptions func() (svcmgr.Options, error)
+	// Gate decides which sessions are sent (run) or shown (preview). Nil is the production gate: the account gate over the signed
+	// identity (preview and stats build it from the saved state, without a request).
+	Gate func(aggregate.Row) uploader.Decision
+	// PreviewGate overrides the gate view that preview and stats use; for tests.
+	PreviewGate func(db *storage.Store) (service.GateView, error)
 }
 
 // New builds the root command.
@@ -118,7 +126,7 @@ func runCmd(env Env) *cobra.Command {
 				selfupdate.CleanupOld(exe) // Windows keeps the replaced binary aside until the next start
 			}
 			err := service.Run(ctx, service.RunOptions{
-				Paths: env.Paths, Version: env.Version,
+				Paths: env.Paths, Version: env.Version, Gate: env.Gate,
 				Logf: func(f string, a ...any) { lg.Printf(f, a...) },
 			})
 			switch {

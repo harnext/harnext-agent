@@ -29,14 +29,17 @@ var audited = map[string][]string{
 type use struct{ file, call string }
 
 // allowed maps a production file to the audited calls it makes and why. Paths are relative to the agent module. Files that
-// hold user content are read in exactly two places: the watchers (transcripts, chat sessions, the Copilot telemetry file) and
-// project (git remote). Everything else is the agent's own state, the service manager or the update check.
+// hold user content are read in exactly four places: the watchers (transcripts, chat sessions, the Copilot telemetry file),
+// project (git remote), account (the Claude account e-mail, hashed at once) and gitid (the git user.email, hashed at once). Everything else is the agent's own state, the service manager or the update check.
 var allowed = map[use]string{
 	// User content: the only places the agent reads files that the user's tools wrote.
-	{"internal/watcher/watcher.go", "filepath.WalkDir"}: "lists *.jsonl transcripts under ~/.claude/projects and the Copilot telemetry file's directory; contents are read only by followFile",
+	{"internal/watcher/watcher.go", "filepath.WalkDir"}: "lists *.jsonl transcripts under each Claude config directory's projects folder (~/.claude/projects, ~/.claude-work/projects ...) and the Copilot telemetry file's directory; contents are read only by followFile",
 	{"internal/watcher/watcher.go", "os.Open"}:          "followFile: opens one *.jsonl transcript, chat session or telemetry file found by the watchers and reads its new lines",
 	{"internal/watcher/watcher.go", "os.Lstat"}:         "skips symlinks and non-regular files before a transcript is read",
-	{"internal/watcher/watcher.go", "os.Stat"}:          "checks that the transcript root exists",
+	{"internal/watcher/watcher.go", "os.Stat"}:          "checks that a transcript root (a config directory's projects folder) exists",
+	{"internal/watcher/discover.go", "os.ReadDir"}:      "lists the names directly under the home directory only to find Claude Code config directories (.claude*); nothing else in it is read",
+	{"internal/watcher/discover.go", "os.Lstat"}:        "checks that <config directory>/projects is a real directory (not a symlink) before it is watched; the directory is not listed here",
+	{"internal/watcher/discover.go", "os.Getenv"}:       "CLAUDE_CONFIG_DIR only, the agent's own copy of Claude Code's config directory setting; no other variable is read",
 	{"internal/watcher/tail.go", "os.Lstat"}:            "checks that the Copilot telemetry file is a regular file before it is followed",
 	{"internal/watcher/chat.go", "os.ReadDir"}:          "lists <workspaceStorage>/<hash>/chatSessions/ only; names are matched, nothing else in a workspace is listed",
 	{"internal/watcher/chat.go", "os.Lstat"}:            "checks that chatSessions is a real directory and that a session file is a regular file",
@@ -44,9 +47,15 @@ var allowed = map[use]string{
 	{"internal/project/project.go", "os.Open"}:          "readSmall: size-capped read of .git (worktree pointer), .git/commondir and .git/config only, to find the git remote; credentials in it are dropped",
 	{"internal/project/project.go", "os.Stat"}:          "looks up whether a project marker name (package.json, go.mod, .git ...) exists; the file is never opened",
 
-	// The agent's own state.
+	{"internal/account/account.go", "os.Lstat"}:         "refuses symlinks and non-regular files before the Claude global config is read",
+	{"internal/account/account.go", "os.Open"}:          "ClaudeEmail: streams .claude.json and keeps only oauthAccount.emailAddress; the e-mail is hashed at once and never stored or logged",
+	{"internal/attribution/gate.go", "os.Lstat"}:        "size and mtime of a Claude global config (.claude.json), only to skip parsing it again while it is unchanged; the file is not opened here",
+	{"internal/gitid/gitid.go", "os.Lstat"}:             "checks that a git config file (global, repository local or included) is a regular file, not a symlink out of the home directory, and records its mtime for the cache",
+	{"internal/gitid/gitid.go", "os.Open"}:              "reads git config files only (size-capped) to find user.email and include paths; the address is compared by hash and never stored or logged",
+	{"internal/gitid/gitid.go", "os.Getenv"}:            "XDG_CONFIG_HOME only, to locate git's global config directory; no other variable is read", // The agent's own state.
 	{"internal/storage/storage.go", "os.OpenFile"}:      "creates the agent's local database file (mode 0600)",
 	{"internal/remoteconfig/store.go", "os.Open"}:       "reads the cached signed configuration the agent wrote",
+	{"internal/identity/store.go", "os.Open"}:           "reads the cached signed identity document the agent wrote",
 	{"internal/service/lock_unix.go", "os.OpenFile"}:    "single-instance lock file in the agent's directory",
 	{"internal/service/lock_unix.go", "os.Open"}:        "reads the PID from the agent's own lock file",
 	{"internal/service/lock_windows.go", "os.OpenFile"}: "single-instance lock file in the agent's directory",
@@ -85,6 +94,7 @@ var allowed = map[use]string{
 
 	{"internal/uploader/uploader.go", "http.NewRequestWithContext"}:     "POST usage numbers to /api/v1/ingest",
 	{"internal/remoteconfig/client.go", "http.NewRequestWithContext"}:   "GET the signed configuration from /api/v1/agent-config",
+	{"internal/identity/client.go", "http.NewRequestWithContext"}:       "GET the signed identity document from /api/v1/agent-identity and POST the masked account report (hash, masked label, session count) to /api/v1/agent-accounts",
 	{"internal/selfupdate/selfupdate.go", "http.NewRequestWithContext"}: "GET the signed release notice and the release package",
 }
 

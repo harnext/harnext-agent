@@ -108,7 +108,7 @@ func TestBackfillStatusLineAndCompletion(t *testing.T) {
 		t.Fatalf("status after batch = %+v", st)
 	}
 	b.Batch(uploader.Result{Accepted: 5, Remaining: 0})
-	b.Pass(nil)
+	b.Pass(uploader.Result{Accepted: 5}, nil)
 	if st := b.Status(); st.Remaining != 0 || !st.Complete {
 		t.Fatalf("status after pass = %+v", st)
 	}
@@ -128,16 +128,47 @@ func TestBackfillNotCompleteWhenPassStartedEarly(t *testing.T) {
 	}
 	s.File(time.Now())
 	s.Done()
-	b.Pass(nil)
+	b.Pass(uploader.Result{}, nil)
 	if b.Status().Complete {
 		t.Fatal("complete although the pass started before the last file was read")
 	}
 	if b.Catchup() {
 		t.Fatal("catch-up still reported after the scan finished")
 	}
-	b.Pass(nil)
+	b.Pass(uploader.Result{}, nil)
 	if !b.Status().Complete {
 		t.Fatal("not complete after a pass that started after the scan")
+	}
+}
+
+// Sessions the gate keeps back are not backlog, and a pass that only held sessions has not delivered the first packet; when
+// the identity makes them sendable the pass queues them and the first packet is recorded as usual.
+func TestBackfillIgnoresGateHeldSessions(t *testing.T) {
+	b := newBackfill(nil, nil, 400, 7*24*time.Hour)
+	s := b.source()
+	s.Found(3)
+	for i := 0; i < 3; i++ {
+		s.File(time.Now())
+	}
+	s.Done()
+	_ = b.Catchup()
+	b.Queued(0)
+	b.Pass(uploader.Result{Skipped: 3}, nil)
+	if st := b.Status(); st.Remaining != 0 || !st.FirstPacketAt.IsZero() {
+		t.Fatalf("status with every session held = %+v", st)
+	}
+	_ = b.Catchup()
+	b.Queued(3)
+	if st := b.Status(); st.Remaining != 3 {
+		t.Fatalf("remaining after the identity arrived = %d, want 3", st.Remaining)
+	}
+	b.Batch(uploader.Result{Accepted: 2, Remaining: 1})
+	if st := b.Status(); st.Remaining != 1 || st.FirstPacketAt.IsZero() {
+		t.Fatalf("status after the first batch = %+v", st)
+	}
+	b.Pass(uploader.Result{Accepted: 3}, nil)
+	if st := b.Status(); st.Remaining != 0 || !st.Complete {
+		t.Fatalf("status after the pass = %+v", st)
 	}
 }
 
@@ -315,7 +346,7 @@ func newBackfillEnv(t *testing.T, cfg http.HandlerFunc) *backfillEnv {
 // run starts the agent and returns when the process "started" (the instant before Run).
 func (e *backfillEnv) run(t *testing.T, sc signedConfig, mutate func(*RunOptions)) (start time.Time, stop func() error) {
 	t.Helper()
-	opts := RunOptions{
+	opts := RunOptions{Gate: testGate,
 		Paths: e.paths, Version: "0.2.0", Root: e.root, ChatRoots: []string{filepath.Join(e.root, "chat")},
 		FlushInterval: 50 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, BatchPause: 20 * time.Millisecond,
 		Keys: sc.keys, Clock: frozenClock{sc.at},

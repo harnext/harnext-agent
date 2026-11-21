@@ -97,7 +97,7 @@ func TestNoFakeSecretLeavesTheMachine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, RunOptions{
+		done <- Run(ctx, RunOptions{Gate: testGate,
 			Paths: h.paths, Version: "0.1.0", Root: root, ChatRoots: []string{h.chatRoot},
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, Keys: h.keys, Clock: frozenClock{h.at},
 			Logf: func(f string, a ...any) { logMu.Lock(); fmt.Fprintf(&logs, f+"\n", a...); logMu.Unlock() },

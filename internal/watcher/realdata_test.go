@@ -22,7 +22,7 @@ func TestRealData(t *testing.T) {
 	agg := aggregate.New()
 	store := NewMemoryOffsets()
 	sink := newSink(agg)
-	w, err := New(Options{Root: root, Offsets: store, Sink: sink, OnError: func(err error) { t.Logf("error: %v", err) }})
+	w, err := New(Options{Roots: []Root{rootOf(root)}, Offsets: store, Sink: sink, OnError: func(err error) { t.Logf("error: %v", err) }})
 	if err != nil {
 		t.Fatal(err)
 	}

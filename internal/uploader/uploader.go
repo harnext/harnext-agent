@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/harnext/harnext-agent/internal/aggregate"
@@ -33,6 +34,7 @@ const (
 	baseBackoff       = time.Minute
 	jitterFraction    = 0.1
 	codeFutureTime    = "future_timestamp"
+	codeUnbound       = "account_unbound"
 )
 
 type Code string
@@ -63,6 +65,16 @@ type Ledger interface {
 	MarkUploaded(digests map[string]string, at time.Time) error
 }
 
+// Decision is the gate's answer for one session. Send=false keeps the session on the machine: it is never counted as pending,
+// backlog or error and never recorded as uploaded. AccountHash (64 lowercase hex) goes into the body; RouteID, the workspace
+// the server will route to, is part of the ledger key so a re-routed session is sent again. Reason is a content-free label.
+type Decision struct {
+	Send        bool
+	AccountHash string
+	RouteID     string
+	Reason      string
+}
+
 type Options struct {
 	BaseURL      string        // https://host[/prefix]; no query, fragment or user info
 	Token        func() string // called per request, never logged
@@ -78,6 +90,9 @@ type Options struct {
 	Rand                   func() float64 // [0,1)
 	// OnBatch, if set, is called after each accepted batch with the totals of the running Sync.
 	OnBatch func(Result)
+	// OnQueued, if set, is called once per Sync with the number of sessions queued for upload (after the gate, the ledger and
+	// the held list), before the first batch is posted, so a backlog count is right from the first request.
+	OnQueued func(n int)
 	// Catchup, if set, is asked before each Run iteration whether more rows are about to arrive
 	// (history is still being read). While true, a successful iteration is followed by
 	// BatchPause instead of the full period, so the backlog drains at the server's pace.
@@ -88,16 +103,20 @@ type Options struct {
 	// BacklogTotal, if set, reports how many sessions the first scan found (last 30 days). It is sent as
 	// X-Harnext-Backlog-Total next to Backlog so the panel can show a percentage; a bare count, no content.
 	BacklogTotal func() int
-	// NotBeforeDay (YYYY-MM-DD, UTC; empty = none) drops usage rows of earlier days before anything is sent. It is set after the
-	// token changed, so work done for the previous organization is not uploaded to the new one (day precision: the switch day
-	// itself is included). A session left without usage rows is not sent.
-	NotBeforeDay string
+	// Gate decides per session (called with its first row) whether and as which account it is sent. Nil is fail-closed:
+	// nothing is sent.
+	Gate func(row aggregate.Row) Decision
 }
 
 type Uploader struct {
 	endpoint string
 	opts     Options
 	http     *http.Client
+	wake     chan struct{}
+
+	mu sync.Mutex
+	// held are the ledger keys the server answered account_unbound; they are not retried until Rewake.
+	held map[string]struct{}
 }
 
 // Result counts what one Sync did.
@@ -107,6 +126,8 @@ type Result struct {
 	Deferred  int // rows refused for a transient reason (future timestamp); retried next time
 	Unchanged int // rows skipped because the server already has this content
 	Invalid   int // rows outside the contract limits; never sent
+	Skipped   int // sessions the gate keeps on the machine; not queued, not counted anywhere else
+	Held      int // sessions whose account the server has no binding for; not retried until Rewake
 	Batches   int
 	Remaining int // rows still queued after the last batch of this Sync (0 when it finished)
 }
@@ -156,7 +177,38 @@ func New(opts Options) (*Uploader, error) {
 	if opts.Rand == nil {
 		opts.Rand = rand.Float64
 	}
-	return &Uploader{endpoint: strings.TrimRight(u.String(), "/") + ingestPath, opts: opts, http: hc}, nil
+	return &Uploader{endpoint: strings.TrimRight(u.String(), "/") + ingestPath, opts: opts, http: hc, wake: make(chan struct{}, 1), held: map[string]struct{}{}}, nil
+}
+
+// Held is the number of sessions the server refused with account_unbound since the last Rewake.
+func (u *Uploader) Held() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.held)
+}
+
+// Rewake forgets the held sessions and ends the wait of Run, so they are tried again at once. Call it when the gate's routes change.
+func (u *Uploader) Rewake() {
+	u.mu.Lock()
+	clear(u.held)
+	u.mu.Unlock()
+	select {
+	case u.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (u *Uploader) isHeld(key string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	_, ok := u.held[key]
+	return ok
+}
+
+func (u *Uploader) hold(key string) {
+	u.mu.Lock()
+	u.held[key] = struct{}{}
+	u.mu.Unlock()
 }
 
 func isLoopbackHost(h string) bool {
@@ -184,11 +236,15 @@ func sleep(ctx context.Context, d time.Duration) error {
 // Batches already accepted stay recorded when a later batch fails, so a retry resumes where
 // it stopped.
 func (u *Uploader) Sync(ctx context.Context, rows []aggregate.Row, configVersion int64) (Result, error) {
-	rows = newestSessionsFirst(dropBeforeDay(rows, u.opts.NotBeforeDay))
-	valid, invalid := prepare(rows, configVersion)
-	res := Result{Invalid: invalid}
+	rows = newestSessionsFirst(rows)
+	valid, invalid, skipped := prepare(rows, configVersion, u.opts.Gate)
+	res := Result{Invalid: invalid, Skipped: skipped}
 	var pending []prepared
 	for _, p := range valid {
+		if u.isHeld(p.key) {
+			res.Held++
+			continue
+		}
 		d, ok, err := u.opts.Ledger.UploadedDigest(p.key)
 		if err != nil {
 			return res, &Error{Code: CodeLedger}
@@ -201,6 +257,9 @@ func (u *Uploader) Sync(ctx context.Context, rows []aggregate.Row, configVersion
 	}
 
 	res.Remaining = len(pending)
+	if u.opts.OnQueued != nil {
+		u.opts.OnQueued(len(pending))
+	}
 	for len(pending) > 0 {
 		if res.Batches > 0 {
 			if err := u.opts.Sleep(ctx, u.opts.BatchPause); err != nil {
@@ -233,6 +292,9 @@ func (u *Uploader) Sync(ctx context.Context, rows []aggregate.Row, configVersion
 				mark[p.key] = p.digest
 			case code == codeFutureTime:
 				res.Deferred++
+			case code == codeUnbound:
+				res.Held++
+				u.hold(p.key)
 			default:
 				res.Rejected++
 				mark[p.key] = p.digest
@@ -392,10 +454,28 @@ func (u *Uploader) Run(ctx context.Context, source func() ([]aggregate.Row, int6
 		if catchup && err == nil {
 			wait = u.opts.BatchPause
 		}
-		if u.opts.Sleep(ctx, wait) != nil {
+		if u.pause(ctx, wait) != nil {
 			return
 		}
 	}
+}
+
+// pause waits d; Rewake ends the wait early without an error.
+func (u *Uploader) pause(ctx context.Context, d time.Duration) error {
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-u.wake:
+			cancel()
+		case <-wctx.Done():
+		}
+	}()
+	err := u.opts.Sleep(wctx, d)
+	if err != nil && ctx.Err() == nil {
+		return nil
+	}
+	return err
 }
 
 func (u *Uploader) nextWait(period time.Duration, err error, failures *int) time.Duration {

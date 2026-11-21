@@ -4,6 +4,7 @@ package scan
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	"github.com/harnext/harnext-agent/internal/aggregate"
@@ -30,7 +31,7 @@ type Options struct {
 
 type claudeSink struct{ agg *aggregate.Aggregator }
 
-func (s claudeSink) Handle(_ watcher.FileID, ev claudecode.Event) { s.agg.Add(ev) }
+func (s claudeSink) Handle(_ watcher.ClaudeFile, ev claudecode.Event) { s.agg.Add(ev) }
 
 type copilotSink struct{ agg *aggregate.CopilotAggregator }
 
@@ -65,7 +66,7 @@ func Collect(ctx context.Context, o Options) ([]aggregate.Row, error) {
 	}
 	if root != "" {
 		if w, err := watcher.New(watcher.Options{
-			Root: root, Offsets: offsets, Parser: claudecode.NewParser(nil), MaxFileAge: maxAge,
+			Roots: []watcher.Root{{Dir: filepath.Dir(root), Projects: root}}, Offsets: offsets, Parser: claudecode.NewParser(nil), MaxFileAge: maxAge,
 			Sink: claudeSink{claude}, OnError: ignore,
 		}); err == nil {
 			_ = w.ScanOnce(ctx) // a missing root is normal (tool not installed); only cancellation matters

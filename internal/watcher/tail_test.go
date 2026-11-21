@@ -290,7 +290,7 @@ func TestTailSharedOffsetStoreWithWatcher(t *testing.T) {
 	store := NewMemoryOffsets()
 
 	claudeSink := newSink(nil)
-	w, err := New(Options{Root: root, Offsets: store, Sink: claudeSink})
+	w, err := New(Options{Roots: []Root{rootOf(root)}, Offsets: store, Sink: claudeSink})
 	if err != nil {
 		t.Fatal(err)
 	}

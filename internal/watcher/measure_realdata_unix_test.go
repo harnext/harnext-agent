@@ -89,7 +89,7 @@ func measureScan(t *testing.T, ex analyzer.Extractor) {
 		p = claudecode.NewParser(ex)
 	}
 	sink := newSink(agg)
-	w, err := New(Options{Root: root, Offsets: NewMemoryOffsets(), Sink: sink, Parser: p, MaxFileAge: window, OnError: func(error) {}})
+	w, err := New(Options{Roots: []Root{rootOf(root)}, Offsets: NewMemoryOffsets(), Sink: sink, Parser: p, MaxFileAge: window, OnError: func(error) {}})
 	if err != nil {
 		t.Fatal(err)
 	}

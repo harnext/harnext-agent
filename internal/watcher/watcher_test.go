@@ -21,6 +21,7 @@ type recSink struct {
 	mu     sync.Mutex
 	events []claudecode.Event
 	ids    []FileID
+	dirs   []string
 	agg    *aggregate.Aggregator
 	notify chan struct{}
 }
@@ -29,10 +30,11 @@ func newSink(agg *aggregate.Aggregator) *recSink {
 	return &recSink{agg: agg, notify: make(chan struct{}, 1024)}
 }
 
-func (s *recSink) Handle(id FileID, ev claudecode.Event) {
+func (s *recSink) Handle(file ClaudeFile, ev claudecode.Event) {
 	s.mu.Lock()
 	s.events = append(s.events, ev)
-	s.ids = append(s.ids, id)
+	s.ids = append(s.ids, file.ID)
+	s.dirs = append(s.dirs, file.ConfigDir)
 	s.mu.Unlock()
 	if s.agg != nil {
 		s.agg.Add(ev)
@@ -54,9 +56,12 @@ func (s *recSink) take() []claudecode.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := s.events
-	s.events, s.ids = nil, nil
+	s.events, s.ids, s.dirs = nil, nil, nil
 	return out
 }
+
+// rootOf is a root whose config directory is the parent of the transcript tree.
+func rootOf(projects string) Root { return Root{Dir: filepath.Dir(projects), Projects: projects} }
 
 func asstLine(msg string, out int) string {
 	return fmt.Sprintf(`{"type":"assistant","sessionId":"s1","requestId":"r_%s","uuid":"a_%s","message":{"id":"%s","model":"m","usage":{"output_tokens":%d}}}`+"\n", msg, msg, msg, out)
@@ -109,7 +114,7 @@ func newHarness(t *testing.T, mutate ...func(*Options)) *harness {
 func (h *harness) start(t *testing.T, mutate ...func(*Options)) {
 	t.Helper()
 	opts := Options{
-		Root: h.root, Offsets: h.store, Sink: h.sink,
+		Roots: []Root{rootOf(h.root)}, Offsets: h.store, Sink: h.sink,
 		OnError: func(err error) { h.errsMu.Lock(); h.errs = append(h.errs, err); h.errsMu.Unlock() },
 	}
 	for _, m := range mutate {
@@ -178,8 +183,9 @@ func TestNewRequiresOptions(t *testing.T) {
 	for name, opts := range map[string]Options{
 		"empty":      {},
 		"no root":    {Offsets: NewMemoryOffsets(), Sink: newSink(nil)},
-		"no offsets": {Root: "x", Sink: newSink(nil)},
-		"no sink":    {Root: "x", Offsets: NewMemoryOffsets()},
+		"no offsets": {Roots: []Root{rootOf("x")}, Sink: newSink(nil)},
+		"no sink":    {Roots: []Root{rootOf("x")}, Offsets: NewMemoryOffsets()},
+		"no dir":     {Roots: []Root{{Projects: "x"}}, Offsets: NewMemoryOffsets(), Sink: newSink(nil)},
 	} {
 		if _, err := New(opts); err == nil {
 			t.Errorf("%s: expected error", name)

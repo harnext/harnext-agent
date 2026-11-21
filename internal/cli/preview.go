@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -34,10 +33,17 @@ func previewCmd(env Env) *cobra.Command {
 				return err
 			}
 			defer db.Close()
-			token, _ := env.Paths.LoadToken()
-			rows, notBefore, err := service.PreviewRows(db, token, time.Now())
+			rows, err := service.PreviewRows(db)
 			if err != nil {
 				return err
+			}
+			view, err := gateFor(env, db)
+			if err != nil {
+				return err
+			}
+			gate := env.Gate
+			if view != nil {
+				gate = view.Decide
 			}
 			var configVersion int64
 			if st, err := env.Paths.ReadStatus(); err == nil && st.Config.Loaded {
@@ -48,9 +54,14 @@ func previewCmd(env Env) *cobra.Command {
 				limit = 0
 			}
 			res := uploader.Preview(rows, uploader.PreviewOptions{
-				AgentVersion: env.Version, ConfigVersion: configVersion, NotBeforeDay: notBefore, MaxSessions: limit,
+				AgentVersion: env.Version, ConfigVersion: configVersion, Gate: gate, MaxSessions: limit,
 			})
 			if res.Total == 0 {
+				if view != nil && len(rows) > 0 {
+					fmt.Fprintln(env.Err, "Nothing would be sent right now: no session passes the account check.")
+					printAttribution(env.Err, view.Summary())
+					return nil
+				}
 				fmt.Fprintln(env.Err, "No data yet: nothing would be sent.")
 				return nil
 			}
@@ -63,6 +74,9 @@ func previewCmd(env Env) *cobra.Command {
 				fmt.Fprintf(env.Err, "%d sessions are outside the contract limits and would never be sent.\n", res.Invalid)
 			}
 			fmt.Fprintln(env.Out, pretty.String())
+			if view != nil {
+				printAttribution(env.Err, view.Summary())
+			}
 			return nil
 		},
 	}

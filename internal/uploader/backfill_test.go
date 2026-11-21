@@ -57,6 +57,7 @@ func TestSyncReportsBatchesAndRemaining(t *testing.T) {
 		BaseURL: ts.URL, Token: func() string { return "t" }, AgentVersion: "0.1.0", Ledger: newLedger(), AllowInsecureLocalhost: true,
 		Sleep:   func(_ context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil },
 		OnBatch: func(r Result) { seen = append(seen, r) },
+		Gate:    testGate,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +91,7 @@ func TestRunCatchupUsesBatchPause(t *testing.T) {
 	u, err := New(Options{
 		BaseURL: ts.URL, Token: func() string { return "t" }, AgentVersion: "0.1.0", Ledger: newLedger(), AllowInsecureLocalhost: true,
 		BatchPause: 3 * time.Second,
+		Gate:       testGate,
 		Rand:       func() float64 { return 0 },
 		Catchup: func() bool {
 			c := catchup[0]

@@ -16,6 +16,7 @@ import (
 	"github.com/harnext/harnext-agent/internal/service"
 	"github.com/harnext/harnext-agent/internal/storage"
 	"github.com/harnext/harnext-agent/internal/svcmgr"
+	"github.com/harnext/harnext-agent/internal/uploader"
 )
 
 const tok = "hxt_" + "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
@@ -28,10 +29,15 @@ type result struct {
 func exec(t *testing.T, p service.Paths, stdin string, args ...string) result {
 	t.Helper()
 	var out, errb bytes.Buffer
-	root := New(Env{Paths: p, Version: "9.9.9", In: strings.NewReader(stdin), Out: &out, Err: &errb})
+	root := New(Env{Paths: p, Version: "9.9.9", In: strings.NewReader(stdin), Out: &out, Err: &errb, Gate: testGate})
 	root.SetArgs(args)
 	err := root.Execute()
 	return result{out.String(), errb.String(), err}
+}
+
+// testGate sends every session as one fixed account to one fixed route; the default gate is fail-closed.
+func testGate(aggregate.Row) uploader.Decision {
+	return uploader.Decision{Send: true, AccountHash: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", RouteID: "route-a"}
 }
 
 func newPaths(t *testing.T) service.Paths {

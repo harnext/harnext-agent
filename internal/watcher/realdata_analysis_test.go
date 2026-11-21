@@ -138,7 +138,7 @@ func scanReal(t *testing.T, root string, ex analyzer.Extractor) (*aggregate.Aggr
 		p = claudecode.NewParser(ex)
 	}
 	sink := newSink(agg)
-	w, err := New(Options{Root: root, Offsets: NewMemoryOffsets(), Sink: sink, Parser: p, OnError: func(error) {}})
+	w, err := New(Options{Roots: []Root{rootOf(root)}, Offsets: NewMemoryOffsets(), Sink: sink, Parser: p, OnError: func(error) {}})
 	if err != nil {
 		t.Fatal(err)
 	}

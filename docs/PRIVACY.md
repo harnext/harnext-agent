@@ -13,7 +13,9 @@ This page describes the Harnext agent, the program that runs on a developer's co
 
 | What | Where | Why |
 |---|---|---|
-| Claude Code session logs (transcripts) | `~/.claude/projects/**/*.jsonl` | Token counts, model, tool use counts, friction counters |
+| Claude Code session logs (transcripts) | `~/.claude/projects/**/*.jsonl` and, if you use a second Claude config folder, `~/.claude*/projects` (folders directly under your home whose name starts with `.claude`) | Token counts, model, tool use counts, friction counters |
+| Claude account email | `oauthAccount.emailAddress` inside `~/.claude.json` (or `<config folder>/.claude.json`), read as a stream; nothing else in that file is kept | Telling your accounts apart. The address is turned into a one-way hash at once and never stored or sent in clear |
+| Git email of a project | `user.email` in the git config files that apply to the working folder (`.git/config`, `~/.gitconfig`, `~/.config/git/config` and includes); git is not run | Telling Copilot accounts apart (Copilot's own account email is not available locally). Hashed at once, never stored or sent in clear |
 | VS Code Copilot chat sessions | VS Code `workspaceStorage/<id>/chatSessions/*.jsonl`, plus `workspace.json` of that workspace | Friction counters, topic, which project folder |
 | Copilot telemetry file | The agent's own file (default), or a path you chose | Tokens, model, Copilot credits |
 | Git data of a project | `.git`, `.git/commondir` and `.git/config` of the working folder | Only the remote URL, reduced to `owner/repo`. User name, password, token, branch and host are dropped |
@@ -35,18 +37,21 @@ Only to your Harnext server, over HTTPS, with your agent token:
 |---|---|
 | `POST /api/v1/ingest` | Per session: tool, project identity, topic label, counters, token counts per model and day, timestamps, the session's active time in seconds (`active_seconds`), and a per-folder breakdown (see below) |
 | `GET /api/v1/agent-config` | Nothing about you except the token and the agent version. Returns the signed rules used to compute counters |
+| `GET /api/v1/agent-identity` | Nothing but the token. Returns the signed list of accounts you connected (one-way hashes and route ids), so the agent knows which sessions to send |
+| `POST /api/v1/agent-accounts` | Accounts found on your computer that are not connected yet: a one-way hash, a masked label such as `c***@gmail.com`, the tool and a session count. Sessions of such accounts are not sent until you connect the account in the panel |
 | `GET /api/v1/agent-release` and the release package | Update check. Packages are verified by signature and checksum |
 
-An ingest request has this shape (shortened; the full schema is [contracts/ingest.v1.schema.json](../contracts/ingest.v1.schema.json), a complete example is [contracts/testdata/ingest.v5.vector.json](../contracts/testdata/ingest.v5.vector.json)):
+An ingest request has this shape (shortened; the full schema is [contracts/ingest.v1.schema.json](../contracts/ingest.v1.schema.json), a complete example is [contracts/testdata/ingest.v6.vector.json](../contracts/testdata/ingest.v6.vector.json)):
 
 ```json
 {
-  "payload_version": 5,
+  "payload_version": 6,
   "agent_version": "0.3.0",
   "config_version": 7,
   "sessions": [{
     "session_external_id": "claude-multi",
     "tool_name": "claude_code",
+    "account_hash": "a1b2c3d4…64 hex characters",
     "project": "acme/app",
     "project_path": "apps/web",
     "topic": "feature",
@@ -61,7 +66,7 @@ An ingest request has this shape (shortened; the full schema is [contracts/inges
 }
 ```
 
-Everything in it is a number, a date, a model name, a fixed label or a project identity.
+Everything in it is a number, a date, a model name, a fixed label or a project identity. `account_hash` is a one-way hash of the account's email address; the server uses it only to route the session to the workspace you connected that account to, and does not store it with the session. The email address itself never leaves your computer.
 
 About the project identity: for a git repository it is `owner/repo` and the folder inside the repository (`apps/web`). Outside git it is the working folder with your home directory replaced by `~` (for example `~/work/client-app`). A folder outside your home directory is sent as it is, so avoid sensitive names in such paths, or ask your administrator how to handle it.
 

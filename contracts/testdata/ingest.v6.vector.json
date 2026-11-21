@@ -1,11 +1,12 @@
 {
   "agent_version": "0.3.0",
   "config_version": 7,
-  "payload_version": 5,
+  "payload_version": 6,
   "sessions": [
     {
       "session_external_id": "claude-multi",
       "tool_name": "claude_code",
+      "account_hash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       "project": "acme/app",
       "project_path": "apps/web",
       "topic": "feature",
@@ -156,6 +157,7 @@
     {
       "session_external_id": "copilot-history",
       "tool_name": "vscode_copilot",
+      "account_hash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       "project": "acme/app",
       "topic": "feature",
       "quality": {

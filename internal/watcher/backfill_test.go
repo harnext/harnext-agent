@@ -48,7 +48,7 @@ func TestClaudeScanIsNewestFirstAndSkipsOldFiles(t *testing.T) {
 	}
 	prog := &recProgress{}
 	h := newHarness(t, func(o *Options) {
-		o.Root = root
+		o.Roots = []Root{rootOf(root)}
 		o.MaxFileAge = 30 * 24 * time.Hour
 	})
 	if err := h.w.scanOnce(context.Background(), prog); err != nil {
@@ -82,7 +82,7 @@ func TestClaudeScanKeepsOffsetsOfFilesThatAged(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "proj", "s.jsonl")
 	write(t, p, asstLine("m1", 5))
-	h := newHarness(t, func(o *Options) { o.Root = root; o.MaxFileAge = 30 * 24 * time.Hour })
+	h := newHarness(t, func(o *Options) { o.Roots = []Root{rootOf(root)}; o.MaxFileAge = 30 * 24 * time.Hour })
 	h.scan(t)
 	before, ok := h.store.Get(p)
 	if !ok {
@@ -105,7 +105,7 @@ func TestClaudeWithoutMaxFileAgeReadsEverything(t *testing.T) {
 	p := filepath.Join(root, "proj", "s.jsonl")
 	write(t, p, asstLine("m1", 5))
 	ageFile(t, p, 400*24*time.Hour)
-	h := newHarness(t, func(o *Options) { o.Root = root })
+	h := newHarness(t, func(o *Options) { o.Roots = []Root{rootOf(root)} })
 	h.scan(t)
 	if h.sink.count() != 1 {
 		t.Fatalf("events = %d, want 1", h.sink.count())
@@ -153,7 +153,7 @@ func TestFileGateBlocksWriterWhileFileIsRead(t *testing.T) {
 	var gate sync.RWMutex
 	locked := make(chan int, 2)
 	h := newHarness(t, func(o *Options) {
-		o.Root = root
+		o.Roots = []Root{rootOf(root)}
 		o.Gate = &gate
 	})
 	// Try to take the write lock as soon as the first line arrives; it must only succeed after the file is done.

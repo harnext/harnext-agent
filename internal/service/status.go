@@ -27,6 +27,9 @@ type StatusFile struct {
 	Copilot CopilotStatus `json:"copilot"`
 	Config  ConfigStatus  `json:"config"`
 	Upload  UploadStatus  `json:"upload"`
+	// Identity and Accounts describe the account gate; both are empty when a test gate replaced it.
+	Identity IdentityStatus `json:"identity"`
+	Accounts AccountsStatus `json:"accounts"`
 	// Backfill is the history import picture (30 days, newest first); see BackfillStatus.Line.
 	Backfill BackfillStatus `json:"backfill"`
 }
@@ -74,6 +77,50 @@ type UploadStatus struct {
 	Deferred    int       `json:"deferred"`
 	Invalid     int       `json:"invalid"`
 	Unchanged   int       `json:"unchanged"`
+	// Skipped sessions are kept on this machine by the account gate; Held sessions were refused by the server with account_unbound.
+	Skipped int `json:"skipped,omitempty"`
+	Held    int `json:"held,omitempty"`
+}
+
+// Identity states shown by status.
+const (
+	IdentityOK            = "ok"
+	IdentityPending       = "pending"
+	IdentityExpired       = "expired"
+	IdentityNoTrustedKeys = "no_trusted_keys"
+)
+
+// IdentityStatus is the signed account identity picture: counts, codes and times only.
+type IdentityStatus struct {
+	State     string    `json:"state,omitempty"`
+	Bindings  int       `json:"bound_accounts,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	LastCheck time.Time `json:"last_check,omitzero"`
+	LastError string    `json:"last_error,omitempty"`
+}
+
+// PendingAccount is a detected account without a binding. Label is masked (c***@example.test); no e-mail or hash is kept.
+type PendingAccount struct {
+	Tool     string `json:"tool"`
+	Label    string `json:"label"`
+	Sessions int    `json:"sessions"`
+}
+
+// AccountsStatus counts sessions by the gate's latest verdict: Sendable ones may leave the machine, Skipped ones are kept by
+// reason (no_account, git_email_missing, identity_pending, account_unbound).
+type AccountsStatus struct {
+	Sendable        int              `json:"sendable,omitempty"`
+	Skipped         map[string]int   `json:"skipped,omitempty"`
+	Pending         []PendingAccount `json:"pending,omitempty"`
+	PendingTotal    int              `json:"pending_total,omitempty"`
+	LastReport      time.Time        `json:"last_report,omitzero"`
+	LastReportError string           `json:"last_report_error,omitempty"`
+}
+
+// GateSummary is the gate picture that status, stats and preview show.
+type GateSummary struct {
+	Identity IdentityStatus
+	Accounts AccountsStatus
 }
 
 // WriteStatus replaces the status file atomically.

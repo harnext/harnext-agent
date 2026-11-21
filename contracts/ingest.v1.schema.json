@@ -4,7 +4,7 @@
   "properties": {
     "payload_version": {
       "type": "number",
-      "const": 5
+      "const": 6
     },
     "agent_version": {
       "type": "string",
@@ -41,6 +41,10 @@
               "claude_code",
               "vscode_copilot"
             ]
+          },
+          "account_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
           },
           "project": {
             "type": "string",
@@ -669,6 +673,7 @@
         "required": [
           "session_external_id",
           "tool_name",
+          "account_hash",
           "project",
           "topic",
           "quality",

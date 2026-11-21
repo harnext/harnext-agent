@@ -104,7 +104,7 @@ func (h *chatHarness) start(t *testing.T) (stop func() error) {
 		result error
 	)
 	go func() {
-		done <- Run(ctx, RunOptions{
+		done <- Run(ctx, RunOptions{Gate: testGate,
 			Paths: h.paths, Version: "0.1.0", Root: filepath.Join(h.chatRoot, "no-claude"), ChatRoots: []string{h.chatRoot},
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond,
 			Keys: h.keys, Clock: clock,
@@ -389,7 +389,7 @@ func TestRestoreCopilotDropsChatOffsets(t *testing.T) {
 	}
 }
 
-// States saved before the active-minutes bump (Claude 3, Copilot 5) cannot be trusted: they are discarded and the files are read
+// States saved before the active-minutes bump (Claude 4, Copilot 5) cannot be trusted: they are discarded and the files are read
 // again from offset 0, once. The next snapshot carries the new versions.
 func TestStatesBeforeActiveMinutesAreDiscardedAndReread(t *testing.T) {
 	db, _ := openDB(t)
@@ -400,16 +400,16 @@ func TestStatesBeforeActiveMinutesAreDiscardedAndReread(t *testing.T) {
 	for _, p := range []string{"/x/claude.jsonl", cop, chatFile} {
 		_ = o.Set(p, watcher.FileState{Offset: 9})
 	}
-	_ = db.SaveState(stateName, []byte(`{"version":3,"sessions":{},"seen":[],"counters":{"skipped":{},"ignored":{}}}`))
+	_ = db.SaveState(stateName, []byte(`{"version":4,"sessions":{},"seen":[],"counters":{"skipped":{},"ignored":{}}}`))
 	_ = db.SaveState(copilotStateName, []byte(`{"version":5,"sessions":{},"seen":[],"counters":{"skipped":{},"ignored":{}}}`))
 	logf := func(string, ...any) {}
 
 	claude, err := restoreAggregator(db, o, logf)
-	if err != nil || claude.Snapshot().Version != 4 {
+	if err != nil || claude.Snapshot().Version != 5 {
 		t.Fatalf("claude: err=%v version=%d", err, claude.Snapshot().Version)
 	}
 	if len(o.Paths()) != 0 {
-		t.Fatalf("offsets kept after a version 3 state: %v", o.Paths())
+		t.Fatalf("offsets kept after a version 4 state: %v", o.Paths())
 	}
 	_ = o.Set("/x/claude.jsonl", watcher.FileState{Offset: 9})
 	_ = o.Set(cop, watcher.FileState{Offset: 9})

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,6 +43,13 @@ func (l *memLedger) MarkUploaded(d map[string]string, _ time.Time) error {
 		l.m[k] = v
 	}
 	return nil
+}
+
+// testHash is a syntactically valid account hash; testGate sends every session as that account to one fixed route.
+const testHash = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+func testGate(aggregate.Row) Decision {
+	return Decision{Send: true, AccountHash: testHash, RouteID: "route-a"}
 }
 
 // withParts gives the row its session's single root folder (turns and quality of the session), as the aggregators do.
@@ -99,7 +108,7 @@ func newUploader(t *testing.T, url string, l Ledger) (*Uploader, *[]time.Duratio
 	var sleeps []time.Duration
 	u, err := New(Options{
 		BaseURL: url, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
-		Ledger: l, AllowInsecureLocalhost: true,
+		Ledger: l, AllowInsecureLocalhost: true, Gate: testGate,
 		Sleep: func(_ context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil },
 	})
 	if err != nil {
@@ -123,10 +132,10 @@ func TestSyncSendsContractShapeAndSkipsUnchanged(t *testing.T) {
 		t.Fatalf("auth header = %q", s.auths[0])
 	}
 	b := s.bodies[0]
-	if b["payload_version"] != float64(5) || b["agent_version"] != "0.1.0" {
+	if b["payload_version"] != float64(6) || b["agent_version"] != "0.1.0" {
 		t.Fatalf("envelope = %v", b)
 	}
-	want := []string{"quality", "project", "session_external_id", "started_at", "ended_at", "tool_name", "topic", "turn_count", "usage", "folders"}
+	want := []string{"quality", "project", "session_external_id", "account_hash", "started_at", "ended_at", "tool_name", "topic", "turn_count", "usage", "folders"}
 	sort.Strings(want)
 	first := b["sessions"].([]any)[0].(map[string]any)
 	var got []string
@@ -478,7 +487,7 @@ func TestBodySizeLimitSplitsBatches(t *testing.T) {
 	defer ts.Close()
 	u, err := New(Options{
 		BaseURL: ts.URL, Token: func() string { return "t" }, AgentVersion: "0.1.0", Ledger: newLedger(),
-		AllowInsecureLocalhost: true, MaxBodyBytes: 1000,
+		AllowInsecureLocalhost: true, MaxBodyBytes: 1000, Gate: testGate,
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	})
 	if err != nil {
@@ -549,7 +558,7 @@ func TestNoTokenSendsNothing(t *testing.T) {
 	ts := s.start()
 	defer ts.Close()
 	u, err := New(Options{BaseURL: ts.URL, Token: func() string { return "" }, AgentVersion: "0.1.0",
-		Ledger: newLedger(), AllowInsecureLocalhost: true})
+		Ledger: newLedger(), AllowInsecureLocalhost: true, Gate: testGate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +602,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 	defer ts.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	u, err := New(Options{BaseURL: ts.URL, Token: func() string { return "t" }, AgentVersion: "0.1.0",
-		Ledger: newLedger(), AllowInsecureLocalhost: true,
+		Ledger: newLedger(), AllowInsecureLocalhost: true, Gate: testGate,
 		Sleep: func(ctx context.Context, _ time.Duration) error { cancel(); return ctx.Err() },
 	})
 	if err != nil {
@@ -735,7 +744,7 @@ func TestBacklogHeaderIsSentOnEveryRequest(t *testing.T) {
 	remaining := 41
 	u, err := New(Options{
 		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
-		Ledger: newLedger(), AllowInsecureLocalhost: true, Backlog: func() int { return remaining },
+		Ledger: newLedger(), AllowInsecureLocalhost: true, Backlog: func() int { return remaining }, Gate: testGate,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -781,7 +790,7 @@ func TestBacklogTotalHeader(t *testing.T) {
 	total := 305
 	u, err := New(Options{
 		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
-		Ledger: newLedger(), AllowInsecureLocalhost: true, BacklogTotal: func() int { return total },
+		Ledger: newLedger(), AllowInsecureLocalhost: true, BacklogTotal: func() int { return total }, Gate: testGate,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -798,40 +807,122 @@ func TestBacklogTotalHeader(t *testing.T) {
 	}
 }
 
-// After a token change usage of earlier days is dropped before anything is sent; a session left without usage is not sent and
-// the others keep the days from the switch day on (the switch day itself is included).
-func TestNotBeforeDayDropsEarlierUsage(t *testing.T) {
+// A session the gate keeps (Send=false) is neither sent nor counted as pending or error, and is never recorded as uploaded.
+func TestGateSkipsSessionsSilently(t *testing.T) {
 	s := &server{t: t, handler: func(w http.ResponseWriter, b map[string]any) { okHandler(w, b) }}
 	ts := s.start()
 	defer ts.Close()
+	l := newLedger()
 	u, err := New(Options{
 		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
-		Ledger: newLedger(), AllowInsecureLocalhost: true, NotBeforeDay: "2026-11-05",
+		Ledger: l, AllowInsecureLocalhost: true,
+		Gate: func(r aggregate.Row) Decision {
+			if r.SessionID == "private" {
+				return Decision{Reason: "unbound"}
+			}
+			return testGate(r)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	day := func(r aggregate.Row, d string) aggregate.Row { r.Day = d; return r }
-	rows := []aggregate.Row{
-		day(row("old"), "2026-11-01"),
-		day(row("spans"), "2026-11-04"),
-		day(row("spans"), "2026-11-05"),
-		day(row("new"), "2026-11-06"),
-	}
-	res, err := u.Sync(context.Background(), rows, 0)
-	if err != nil || res.Accepted != 2 {
+	res, err := u.Sync(context.Background(), []aggregate.Row{row("private"), row("shared")}, 0)
+	if err != nil || res.Accepted != 1 || res.Skipped != 1 || res.Remaining != 0 || res.Invalid != 0 || res.Rejected != 0 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
-	sent := map[string]int{}
-	for _, sess := range s.bodies[0]["sessions"].([]any) {
-		m := sess.(map[string]any)
-		sent[m["session_external_id"].(string)] = len(m["usage"].([]any))
+	sessions := s.bodies[0]["sessions"].([]any)
+	if len(sessions) != 1 || sessions[0].(map[string]any)["session_external_id"] != "shared" || sessions[0].(map[string]any)["account_hash"] != testHash {
+		t.Fatalf("sent = %v", sessions)
 	}
-	if len(sent) != 2 || sent["spans"] != 1 || sent["new"] != 1 {
-		t.Fatalf("sent = %v", sent)
+	if len(l.m) != 1 {
+		t.Fatalf("ledger = %v", l.m)
 	}
-	if got := dropBeforeDay(rows, ""); len(got) != len(rows) {
-		t.Fatalf("empty day must keep all rows, kept %d", len(got))
+}
+
+// No gate (or a nil result) is fail-closed: nothing reaches the server.
+func TestNilGateSendsNothing(t *testing.T) {
+	s := &server{t: t, handler: func(w http.ResponseWriter, b map[string]any) { okHandler(w, b) }}
+	ts := s.start()
+	defer ts.Close()
+	u, err := New(Options{BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0", Ledger: newLedger(), AllowInsecureLocalhost: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := u.Sync(context.Background(), []aggregate.Row{row("a")}, 0)
+	if err != nil || res.Skipped != 1 || res.Accepted != 0 || len(s.bodies) != 0 {
+		t.Fatalf("res=%+v err=%v bodies=%d", res, err, len(s.bodies))
+	}
+}
+
+// An invalid account hash drops the session instead of sending it.
+func TestGateWithBadHashIsInvalid(t *testing.T) {
+	u, _ := newUploader(t, "http://127.0.0.1:1", newLedger())
+	u.opts.Gate = func(aggregate.Row) Decision { return Decision{Send: true, AccountHash: "ABC", RouteID: "r"} }
+	res, err := u.Sync(context.Background(), []aggregate.Row{row("a")}, 0)
+	if err != nil || res.Invalid != 1 || res.Accepted != 0 {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+// The ledger key includes the route: the same session routed elsewhere is sent again.
+func TestRouteChangeResendsSession(t *testing.T) {
+	s := &server{t: t, handler: func(w http.ResponseWriter, b map[string]any) { okHandler(w, b) }}
+	ts := s.start()
+	defer ts.Close()
+	route := "route-a"
+	u, err := New(Options{
+		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
+		Ledger: newLedger(), AllowInsecureLocalhost: true,
+		Gate: func(aggregate.Row) Decision { return Decision{Send: true, AccountHash: testHash, RouteID: route} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int{1, 0, 1} {
+		if i == 2 {
+			route = "route-b"
+		}
+		res, err := u.Sync(context.Background(), []aggregate.Row{row("a")}, 0)
+		if err != nil || res.Accepted != want {
+			t.Fatalf("sync %d: res=%+v err=%v", i, res, err)
+		}
+	}
+}
+
+// account_unbound is neither recorded nor retried until Rewake; the other sessions of the batch are accepted normally.
+func TestAccountUnboundIsHeldUntilRewake(t *testing.T) {
+	bound := false
+	s := &server{t: t, handler: func(w http.ResponseWriter, b map[string]any) {
+		n := len(b["sessions"].([]any))
+		if bound {
+			okHandler(w, b)
+			return
+		}
+		fmt.Fprintf(w, `{"accepted":%d,"rejected":0,"errors":[{"index":0,"code":"account_unbound"}]}`, n-1)
+	}}
+	ts := s.start()
+	defer ts.Close()
+	l := newLedger()
+	u, _ := newUploader(t, ts.URL, l)
+	rows := []aggregate.Row{row("a"), row("b")}
+
+	res, err := u.Sync(context.Background(), rows, 0)
+	if err != nil || res.Held != 1 || res.Accepted != 1 || res.Rejected != 0 || u.Held() != 1 || len(l.m) != 1 {
+		t.Fatalf("res=%+v err=%v held=%d ledger=%d", res, err, u.Held(), len(l.m))
+	}
+	calls := len(s.bodies)
+	res, err = u.Sync(context.Background(), rows, 0)
+	if err != nil || res.Held != 1 || len(s.bodies) != calls {
+		t.Fatalf("held session was retried: res=%+v err=%v calls=%d->%d", res, err, calls, len(s.bodies))
+	}
+	bound = true
+	u.Rewake()
+	if u.Held() != 0 {
+		t.Fatal("Rewake must clear the held sessions")
+	}
+	res, err = u.Sync(context.Background(), rows, 0)
+	if err != nil || res.Accepted != 1 || res.Held != 0 || len(l.m) != 2 {
+		t.Fatalf("after Rewake: res=%+v err=%v ledger=%d", res, err, len(l.m))
 	}
 }
 
@@ -943,10 +1034,10 @@ func TestSessionWithBrokenFoldersIsInvalid(t *testing.T) {
 	}
 }
 
-// The wire format is the contract: contracts/testdata/ingest.v5.vector.json is produced by this code (UPDATE_CONTRACT=1 to
+// The wire format is the contract: contracts/testdata/ingest.v6.vector.json is produced by this code (UPDATE_CONTRACT=1 to
 // rewrite it) and the server's contract test parses the same file with the server's schema, so a drift on either
 // side fails a test on its own side.
-func TestIngestV5VectorMatchesWire(t *testing.T) {
+func TestIngestV6VectorMatchesWire(t *testing.T) {
 	fq := func(a, f, first int64) analyzer.Quality {
 		return analyzer.Quality{Exchanges: a, AnalyzedExchanges: a, FrictionExchanges: f, FxPushback: f, FxPrimaryPushback: f, ToolCalls: a, Responses: a, FirstFrictionExchange: first}
 	}
@@ -976,8 +1067,8 @@ func TestIngestV5VectorMatchesWire(t *testing.T) {
 	old := resolveProject
 	resolveProject = func(string) project.Identity { return project.Identity{Project: "acme/app"} }
 	defer func() { resolveProject = old }()
-	prepared, invalid := prepare(rows, 7)
-	if invalid != 0 || len(prepared) != 2 {
+	prepared, invalid, skipped := prepare(rows, 7, testGate)
+	if invalid != 0 || skipped != 0 || len(prepared) != 2 {
 		t.Fatalf("prepared=%d invalid=%d", len(prepared), invalid)
 	}
 	sessions := make([]json.RawMessage, 0, len(prepared))
@@ -989,7 +1080,7 @@ func TestIngestV5VectorMatchesWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = append(got, '\n')
-	path := "../../contracts/testdata/ingest.v5.vector.json"
+	path := "../../contracts/testdata/ingest.v6.vector.json"
 	if os.Getenv("UPDATE_CONTRACT") == "1" {
 		if err := os.WriteFile(path, got, 0o644); err != nil {
 			t.Fatal(err)
@@ -1000,6 +1091,57 @@ func TestIngestV5VectorMatchesWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(want) != string(got) {
-		t.Fatalf("%s is out of date; run UPDATE_CONTRACT=1 go test ./internal/uploader -run TestIngestV5Vector\n%s", path, got)
+		t.Fatalf("%s is out of date; run UPDATE_CONTRACT=1 go test ./internal/uploader -run TestIngestV6Vector\n%s", path, got)
+	}
+	checkAgainstSchema(t, "../../contracts/ingest.v1.schema.json", got)
+}
+
+// checkAgainstSchema is a stdlib spot check of the contract: the payload_version const, the required account_hash and its pattern.
+func checkAgainstSchema(t *testing.T, schemaPath string, payload []byte) {
+	t.Helper()
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			PayloadVersion struct {
+				Const float64 `json:"const"`
+			} `json:"payload_version"`
+			Sessions struct {
+				Items struct {
+					Required   []string `json:"required"`
+					Properties struct {
+						AccountHash struct {
+							Pattern string `json:"pattern"`
+						} `json:"account_hash"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"sessions"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Properties.PayloadVersion.Const != PayloadVersion {
+		t.Fatalf("schema payload_version const = %v, agent sends %d", schema.Properties.PayloadVersion.Const, PayloadVersion)
+	}
+	items := schema.Properties.Sessions.Items
+	if !slices.Contains(items.Required, "account_hash") || items.Properties.AccountHash.Pattern != "^[0-9a-f]{64}$" {
+		t.Fatalf("schema account_hash: required=%v pattern=%q", items.Required, items.Properties.AccountHash.Pattern)
+	}
+	re := regexp.MustCompile(items.Properties.AccountHash.Pattern)
+	var p struct {
+		Sessions []struct {
+			AccountHash string `json:"account_hash"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil || len(p.Sessions) == 0 {
+		t.Fatalf("payload: %v", err)
+	}
+	for _, s := range p.Sessions {
+		if !re.MatchString(s.AccountHash) {
+			t.Fatalf("account_hash %q does not match the schema pattern", s.AccountHash)
+		}
 	}
 }

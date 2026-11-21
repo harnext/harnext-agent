@@ -68,7 +68,7 @@ func TestFolderSplitEndToEnd(t *testing.T) {
 	done := make(chan error, 1)
 	var once sync.Once
 	go func() {
-		done <- Run(ctx, RunOptions{
+		done <- Run(ctx, RunOptions{Gate: testGate,
 			Paths: h.paths, Version: "0.1.0", Root: root, ChatRoots: []string{h.chatRoot},
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: 50 * time.Millisecond, Keys: h.keys, Clock: clock,
 		})

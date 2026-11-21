@@ -9,10 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/harnext/harnext-agent/internal/account"
 	"github.com/harnext/harnext-agent/internal/aggregate"
 	"github.com/harnext/harnext-agent/internal/analyzer"
+	"github.com/harnext/harnext-agent/internal/identity"
 	"github.com/harnext/harnext-agent/internal/parser/claudecode"
 	"github.com/harnext/harnext-agent/internal/parser/copilot"
 	"github.com/harnext/harnext-agent/internal/remoteconfig"
@@ -32,10 +35,12 @@ const (
 type RunOptions struct {
 	Paths   Paths
 	Version string
-	// Root overrides the transcript root (default ~/.claude/projects); for tests.
+	// Root overrides transcript discovery with one explicit root (its parent is the config directory); for tests.
 	Root string
 	// ChatRoots overrides the VS Code workspaceStorage roots; for tests.
-	ChatRoots     []string
+	ChatRoots []string
+	// Home overrides the user home directory (Claude config discovery, git config); for tests.
+	Home          string
 	FlushInterval time.Duration // default DefaultFlushInterval
 	UploadPeriod  time.Duration // default uploader.DefaultPeriod
 	ConfigPeriod  time.Duration // default remoteconfig.DefaultPeriod
@@ -51,6 +56,15 @@ type RunOptions struct {
 	FirstPacketWindow   time.Duration
 	ConfigGrace         time.Duration
 	BatchPause          time.Duration
+	// Gate decides per session whether it is sent and to which account route. Nil builds the production gate: the attribution
+	// gate over the signed identity document (fail closed without a valid one). Tests inject their own.
+	Gate func(aggregate.Row) uploader.Decision
+	// IdentityPeriod spaces the identity document refreshes (zero: identity.DefaultPeriod). The account check, report and
+	// re-report periods default to 30 s, 30 min and 2 min; tests shorten them.
+	IdentityPeriod     time.Duration
+	AccountCheckPeriod time.Duration
+	AccountReportEvery time.Duration
+	AccountReportGap   time.Duration
 	// Keys overrides the build-time trusted keys; for tests.
 	Keys       remoteconfig.TrustedKeys
 	Clock      remoteconfig.Clock // configuration expiry clock; default system clock
@@ -59,9 +73,9 @@ type RunOptions struct {
 	Logf func(format string, args ...any)
 }
 
-type sinkFunc func(watcher.FileID, claudecode.Event)
+type sinkFunc func(watcher.ClaudeFile, claudecode.Event)
 
-func (f sinkFunc) Handle(id watcher.FileID, ev claudecode.Event) { f(id, ev) }
+func (f sinkFunc) Handle(file watcher.ClaudeFile, ev claudecode.Event) { f(file, ev) }
 
 type copilotSinkFunc func(watcher.FileID, copilot.Event)
 
@@ -130,13 +144,6 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 		return false, err
 	}
 	defer db.Close()
-	notBeforeDay, err := resolveTokenEpoch(db, token, time.Now())
-	if err != nil {
-		return false, err
-	}
-	if notBeforeDay != "" {
-		logf("token changed: usage before %s is not uploaded", notBeforeDay)
-	}
 	offsets, err := LoadOffsets(db)
 	if err != nil {
 		return false, err
@@ -172,6 +179,50 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 	mgr := remoteconfig.NewManager(remoteconfig.ManagerOptions{
 		Fetcher: client, Keys: keys, Store: remoteconfig.NewStore(o.Paths.RemoteConfig), Period: o.ConfigPeriod, Clock: o.Clock,
 	})
+
+	// roots is the one discovery both the transcript watcher and the account gate use.
+	home, homeErr := o.Home, error(nil)
+	if home == "" {
+		home, homeErr = os.UserHomeDir()
+	}
+	var fixedRoots []watcher.Root
+	roots := func() []watcher.Root { return watcher.DiscoverClaudeRoots(home) }
+	if o.Root != "" {
+		fixedRoots = []watcher.Root{{Dir: filepath.Dir(o.Root), Projects: o.Root}}
+		roots = func() []watcher.Root { return fixedRoots }
+	} else if homeErr != nil {
+		return false, homeErr
+	}
+
+	gate := o.Gate
+	var ag *accountGate
+	var upRef atomic.Pointer[uploader.Uploader]
+	if gate == nil {
+		idc, err := identity.NewClient(identity.ClientOptions{
+			BaseURL: settings.ServerURL, Token: func() string { return token }, AgentVersion: o.Version,
+			AllowInsecureLocalhost: settings.AllowInsecureLocalhost, HTTPClient: o.HTTPClient,
+		})
+		if err != nil {
+			return false, err
+		}
+		idm := identity.NewManager(identity.ManagerOptions{
+			Remote: idc, Keys: keys, Store: identity.NewStore(o.Paths.IdentityFile), Period: o.IdentityPeriod, Clock: o.Clock,
+			// A connected account makes held sessions sendable: try them again at once.
+			OnChange: func() {
+				if u := upRef.Load(); u != nil {
+					u.Rewake()
+				}
+			},
+		})
+		saved, _, err := db.LoadState(accountsStateName)
+		if err != nil {
+			return false, err
+		}
+		ag = newAccountGate(home, roots, saved, idm, len(keys) > 0, logf)
+		ag.gate.ObserveAccounts() // before the first upload cycle
+		gate = ag.Decide
+	}
+
 	parser := claudecode.NewParser(nil)
 	// fileGate keeps the uploader from reading rows while a transcript or chat file is half read:
 	// a session is sent once its file is fully processed, not once per partial state.
@@ -197,6 +248,18 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 	app.apply()
 	if len(keys) == 0 {
 		logf("no trusted keys in this build: friction analysis is off")
+	}
+	if ag != nil {
+		check := orDefault(o.AccountCheckPeriod, accountCheckPeriod)
+		run(func() { ag.observeLoop(ctx, check) })
+		if len(keys) == 0 {
+			logf("no trusted keys in this build: sessions are held back (identity_pending)")
+		} else {
+			run(func() { _ = ag.idm.Run(ctx) })
+			run(func() {
+				ag.reportLoop(ctx, check, orDefault(o.AccountReportEvery, accountReportEvery), orDefault(o.AccountReportGap, accountReportGap), logf)
+			})
+		}
 	}
 	_, haveConfig := mgr.Current()
 	if len(keys) > 0 {
@@ -229,26 +292,33 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 	up, err := uploader.New(uploader.Options{
 		BaseURL: settings.ServerURL, Token: func() string { return token }, AgentVersion: clip(o.Version, 32),
 		Ledger: db, AllowInsecureLocalhost: settings.AllowInsecureLocalhost, HTTPClient: o.HTTPClient,
-		BatchPause: o.BatchPause, OnBatch: bf.Batch, Catchup: bf.Catchup, Backlog: func() int { return bf.Status().Remaining },
-		BacklogTotal: func() int { return bf.Status().Found }, NotBeforeDay: notBeforeDay,
+		BatchPause: o.BatchPause, OnBatch: bf.Batch, OnQueued: bf.Queued, Catchup: bf.Catchup, Backlog: func() int { return bf.Status().Remaining },
+		BacklogTotal: func() int { return bf.Status().Found }, Gate: gate,
 	})
 	if err != nil {
 		return false, err
 	}
+	upRef.Store(up)
 
-	st := &statusKeeper{backfill: bf, paths: o.Paths, copilotPath: copilotPath, ownFile: settings.CopilotOTelPath == "", base: StatusFile{PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC()}}
+	st := &statusKeeper{backfill: bf, acct: ag, paths: o.Paths, copilotPath: copilotPath, ownFile: settings.CopilotOTelPath == "", base: StatusFile{PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC()}}
 	st.base.Config.TrustedKeys = len(keys) > 0
 
 	var wlastErr statusErr
 	claudeSrc, tailSrc := bf.source(), bf.source()
-	w, err := watcher.New(watcher.Options{
-		Root: rootOrDefault(o.Root), Offsets: offsets, Parser: parser, MaxFileAge: o.HistoryMaxAge, Progress: claudeSrc, Gate: fileGate,
-		Sink: sinkFunc(func(_ watcher.FileID, ev claudecode.Event) { agg.Add(ev) }),
+	claudeOpts := watcher.Options{
+		Offsets: offsets, Parser: parser, MaxFileAge: o.HistoryMaxAge, Progress: claudeSrc, Gate: fileGate,
+		Sink: sinkFunc(func(f watcher.ClaudeFile, ev claudecode.Event) { agg.AddFrom(account.DirID(f.ConfigDir), ev) }),
 		OnError: func(err error) {
 			wlastErr.set(err.Error())
 			logf("watcher: %v", err)
 		},
-	})
+	}
+	if o.Root != "" {
+		claudeOpts.Roots = fixedRoots
+	} else {
+		claudeOpts.RootsFunc = roots
+	}
+	w, err := watcher.New(claudeOpts)
 	if err != nil {
 		return false, err
 	}
@@ -284,6 +354,12 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 
 	publish := func() { st.publish(agg, copilotAgg, mgr, wlastErr.get(), logf) }
 	flush := func() {
+		if ag != nil {
+			ag.gate.ObserveAccounts()
+			if err := ag.saveTimeline(db); err != nil {
+				logf("account history not saved: %v", err)
+			}
+		}
 		pend := offsets.Pending()
 		if !pend.Empty() {
 			blob, err := json.Marshal(agg.Snapshot())
@@ -346,7 +422,7 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 		}
 		publish()
 		up.Run(ctx, app.source, o.UploadPeriod, func(r uploader.Result, err error) {
-			bf.Pass(err)
+			bf.Pass(r, err)
 			st.recordUpload(r, err)
 			publish()
 			if err != nil {
@@ -401,6 +477,11 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 	}
 	if rescan {
 		logf("configuration arrived after history was read without it: reading that history again")
+		if ag != nil {
+			if err := ag.saveTimeline(db); err != nil {
+				logf("account history not saved: %v", err)
+			}
+		}
 		if err := dropReadState(db, offsets); err != nil {
 			return false, err
 		}
@@ -463,22 +544,18 @@ func dropReadState(db *storage.Store, offsets *OffsetStore) error {
 	return db.DeleteState(copilotStateName)
 }
 
-func rootOrDefault(root string) string {
-	if root != "" {
-		return root
-	}
-	r, err := watcher.DefaultRoot()
-	if err != nil {
-		return ""
-	}
-	return r
-}
-
 func clip(s string, n int) string {
 	if len(s) > n {
 		return s[:n]
 	}
 	return s
+}
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
 }
 
 // restoreAggregator loads the saved snapshot. Offsets without a usable snapshot would skip
@@ -618,6 +695,7 @@ func (e *statusErr) get() string  { e.mu.Lock(); defer e.mu.Unlock(); return e.s
 
 type statusKeeper struct {
 	backfill *backfill
+	acct     *accountGate // nil when a test gate replaced the account gate
 	paths    Paths
 	// copilotPath is only stat-ed; it is never written to the status file.
 	copilotPath string
@@ -634,6 +712,7 @@ func (s *statusKeeper) recordUpload(r uploader.Result, err error) {
 	s.upload.LastAttempt = now
 	s.upload.Accepted, s.upload.Rejected, s.upload.Deferred = r.Accepted, r.Rejected, r.Deferred
 	s.upload.Invalid, s.upload.Unchanged = r.Invalid, r.Unchanged
+	s.upload.Skipped, s.upload.Held = r.Skipped, r.Held
 	if err != nil {
 		s.upload.LastError = errCode(err)
 		return
@@ -668,8 +747,13 @@ func (s *statusKeeper) publish(agg *aggregate.Aggregator, cop *aggregate.Copilot
 	}
 	fi, ferr := os.Lstat(s.copilotPath)
 	ms := mgr.Status()
+	var gate GateSummary
+	if s.acct != nil {
+		gate = s.acct.Summary()
+	}
 	s.mu.Lock()
 	out := s.base
+	out.Identity, out.Accounts = gate.Identity, gate.Accounts
 	out.Copilot = CopilotStatus{
 		Sessions: aggregate.CountSessions(copRows), UniqueSpans: cc.UniqueSpans, SkippedLines: cskipped,
 		BackgroundSpans: cc.Ignored["background_chat"], File: ferr == nil && fi.Mode().IsRegular(),

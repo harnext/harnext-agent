@@ -11,7 +11,7 @@ This repository holds the agent and the wire contracts it speaks. The Harnext se
 
 ## What it reads and what it sends
 
-- **Reads (read-only):** Claude Code transcripts under `~/.claude/projects`, the Copilot OpenTelemetry file, and VS Code Copilot chat session files. It does not open your project files, `.env` or `appsettings.json`.
+- **Reads (read-only):** Claude Code transcripts under `~/.claude/projects` (and `~/.claude*/projects` for a second config folder), the account email of a Claude config (`oauthAccount.emailAddress` in `~/.claude.json`, streamed, hashed at once), the git `user.email` that applies to a working folder (config files only, git is not run), the Copilot OpenTelemetry file, and VS Code Copilot chat session files. It does not open your project files, `.env` or `appsettings.json`.
 - **Sends:** numbers and labels only: token counts, model, tool, session ID and times, turn count, topic label, project name (`owner/repo` from the git remote), and quality counters. The full table and an example request are in [docs/PRIVACY.md](docs/PRIVACY.md) (Turkish: [docs/GIZLILIK.md](docs/GIZLILIK.md)).
 - **Never sends:** prompt text, reply text, source code, file contents, file names, full paths, your user name, branch names.
 

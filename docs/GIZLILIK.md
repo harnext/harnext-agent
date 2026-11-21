@@ -13,7 +13,9 @@ Bu sayfa, geliştiricinin bilgisayarında çalışan Harnext agent'ını anlatı
 
 | Ne | Nerede | Neden |
 |---|---|---|
-| Claude Code oturum kayıtları (transcript) | `~/.claude/projects/**/*.jsonl` | Token sayıları, model, araç kullanım adetleri, friction sayaçları |
+| Claude Code oturum kayıtları (transcript) | `~/.claude/projects/**/*.jsonl`; ikinci bir Claude yapılandırma klasörü kullanıyorsanız `~/.claude*/projects` (ev klasörünün hemen altında adı `.claude` ile başlayan klasörler) | Token sayıları, model, araç kullanım adetleri, friction sayaçları |
+| Claude hesabının e-postası | `~/.claude.json` (veya `<yapılandırma klasörü>/.claude.json`) içindeki `oauthAccount.emailAddress`, akışla okunur; dosyanın geri kalanı tutulmaz | Hesaplarınızı ayırmak. Adres anında tek yönlü hash'e çevrilir; düz metin olarak saklanmaz ve gönderilmez |
+| Projenin git e-postası | Çalışma klasörüne uygulanan git yapılandırma dosyalarındaki `user.email` (`.git/config`, `~/.gitconfig`, `~/.config/git/config` ve include'lar); git çalıştırılmaz | Copilot hesaplarını ayırmak (Copilot hesabının e-postası yerelde yoktur). Anında hash'lenir, düz metin olarak saklanmaz ve gönderilmez |
 | VS Code Copilot sohbet oturumları | VS Code `workspaceStorage/<id>/chatSessions/*.jsonl` ve aynı çalışma alanının `workspace.json` dosyası | Friction sayaçları, konu, hangi proje klasörü |
 | Copilot telemetri dosyası | Agent'ın kendi dosyası (varsayılan) veya sizin seçtiğiniz yol | Token, model, Copilot kredisi |
 | Projenin git verisi | Çalışma klasörünün `.git`, `.git/commondir` ve `.git/config` dosyaları | Yalnızca remote adresi, `owner/repo` haline indirgenir. Kullanıcı adı, parola, token, branch ve sunucu adı atılır |
@@ -35,18 +37,21 @@ Yalnızca kendi Harnext sunucunuza, HTTPS üzerinden ve agent token'ınızla:
 |---|---|
 | `POST /api/v1/ingest` | Oturum başına: araç, proje kimliği, konu etiketi, sayaçlar, model ve gün başına token sayıları, zamanlar, oturumun aktif süresi (saniye, `active_seconds`) ve klasör kırılımı (aşağıya bakın) |
 | `GET /api/v1/agent-config` | Token ve agent sürümü dışında sizinle ilgili bir şey yok. Sayaçları hesaplamak için kullanılan imzalı kuralları döner |
+| `GET /api/v1/agent-identity` | Yalnızca token. Bağladığınız hesapların imzalı listesini (tek yönlü hash'ler ve rota kimlikleri) döner; agent hangi oturumları göndereceğini böyle bilir |
+| `POST /api/v1/agent-accounts` | Bilgisayarınızda bulunan ve henüz bağlanmamış hesaplar: tek yönlü hash, `c***@gmail.com` gibi maskeli bir etiket, araç ve oturum sayısı. Böyle bir hesabın oturumları, hesabı panelden bağlayana kadar gönderilmez |
 | `GET /api/v1/agent-release` ve sürüm paketi | Güncelleme kontrolü. Paketler imza ve sha256 ile doğrulanır |
 
-Bir ingest isteği şu biçimdedir (kısaltılmış; tam şema [contracts/ingest.v1.schema.json](../contracts/ingest.v1.schema.json), eksiksiz örnek [contracts/testdata/ingest.v5.vector.json](../contracts/testdata/ingest.v5.vector.json)):
+Bir ingest isteği şu biçimdedir (kısaltılmış; tam şema [contracts/ingest.v1.schema.json](../contracts/ingest.v1.schema.json), eksiksiz örnek [contracts/testdata/ingest.v6.vector.json](../contracts/testdata/ingest.v6.vector.json)):
 
 ```json
 {
-  "payload_version": 5,
+  "payload_version": 6,
   "agent_version": "0.3.0",
   "config_version": 7,
   "sessions": [{
     "session_external_id": "claude-multi",
     "tool_name": "claude_code",
+    "account_hash": "a1b2c3d4…64 hex characters",
     "project": "acme/app",
     "project_path": "apps/web",
     "topic": "feature",
@@ -61,7 +66,7 @@ Bir ingest isteği şu biçimdedir (kısaltılmış; tam şema [contracts/ingest
 }
 ```
 
-İçindeki her şey bir sayı, bir tarih, bir model adı, sabit bir etiket veya bir proje kimliğidir.
+İçindeki her şey bir sayı, bir tarih, bir model adı, sabit bir etiket veya bir proje kimliğidir. `account_hash`, hesabın e-posta adresinin tek yönlü hash'idir; sunucu onu yalnızca oturumu hesabı bağladığınız workspace'e yönlendirmek için kullanır ve oturumla birlikte saklamaz. E-posta adresinin kendisi bilgisayarınızdan çıkmaz.
 
 Proje kimliği hakkında: git deposunda `owner/repo` ve deponun içindeki klasördür (`apps/web`). Git dışında, ev klasörünüzün `~` ile değiştirildiği çalışma klasörüdür (ör. `~/work/client-app`). Ev klasörünüzün dışındaki bir klasör olduğu gibi gönderilir; bu yüzden böyle yollarda hassas isimlerden kaçının veya yöneticinizle nasıl ele alınacağını konuşun.
 

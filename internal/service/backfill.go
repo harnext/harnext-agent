@@ -172,15 +172,24 @@ func (b *backfill) Batch(r uploader.Result) {
 	b.log(line)
 }
 
-// Pass records the end of an upload pass.
-func (b *backfill) Pass(err error) {
+// Queued records how many sendable sessions the running upload pass has queued. The gate's skipped and held sessions are
+// not part of it: they are not on their way to the server until their account is bound.
+func (b *backfill) Queued(n int) {
+	b.mu.Lock()
+	b.queued = n
+	b.mu.Unlock()
+}
+
+// Pass records the end of an upload pass. The first packet counts as sent once the server accepted or already had history, or
+// when the pass had nothing the gate kept back; a pass that only skipped or held sessions has not delivered anything yet.
+func (b *backfill) Pass(r uploader.Result, err error) {
 	if err != nil {
 		return
 	}
 	b.mu.Lock()
 	b.queued = 0
 	line := ""
-	if b.firstSent.IsZero() {
+	if b.firstSent.IsZero() && (r.Accepted > 0 || r.Unchanged > 0 || r.Skipped+r.Held == 0) {
 		line = b.firstSentLocked() // nothing to send: the server already has the history
 	}
 	if b.passCoversAll && !b.complete {

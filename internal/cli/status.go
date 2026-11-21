@@ -61,6 +61,7 @@ func statusCmd(env Env) *cobra.Command {
 			fmt.Fprintf(w, "Tracked:   %d sessions, %d responses, %d unreadable lines skipped\n", st.Sessions, st.UniqueResponses, st.SkippedLines)
 			fmt.Fprintf(w, "Analysis:  %s\n", configLine(st.Config))
 			fmt.Fprintf(w, "Upload:    %s\n", uploadLine(st.Upload))
+			printAttribution(w, service.GateSummary{Identity: st.Identity, Accounts: st.Accounts})
 			if st.Backfill.Found > 0 || !st.Backfill.FirstPacketAt.IsZero() {
 				fmt.Fprintf(w, "Backfill:  %s\n", strings.TrimPrefix(st.Backfill.Line(), "backfill: "))
 			}
@@ -93,6 +94,12 @@ func uploadLine(u service.UploadStatus) string {
 	s := fmt.Sprintf("last attempt %s: %d sent, %d unchanged, %d rejected, %d invalid", ago(u.LastAttempt), u.Accepted, u.Unchanged, u.Rejected, u.Invalid)
 	if u.LastError != "" {
 		s += "; error: " + u.LastError
+	}
+	if u.Skipped > 0 {
+		s += fmt.Sprintf("; %d kept on this machine", u.Skipped)
+	}
+	if u.Held > 0 {
+		s += fmt.Sprintf("; %d refused by the server (account not connected)", u.Held)
 	}
 	if !u.LastSuccess.IsZero() {
 		s += "; last success " + ago(u.LastSuccess)
@@ -135,6 +142,17 @@ func statsCmd(env Env) *cobra.Command {
 				return err
 			}
 			printStats(env, rows)
+			view, err := gateFor(env, db)
+			if err != nil {
+				return err
+			}
+			if view != nil && len(rows) > 0 {
+				if err := feedGate(db, view); err != nil {
+					return err
+				}
+				fmt.Fprintln(env.Out)
+				printAttribution(env.Out, view.Summary())
+			}
 			return nil
 		},
 	}

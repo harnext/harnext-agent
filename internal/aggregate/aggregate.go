@@ -25,10 +25,11 @@ import (
 const (
 	ToolClaudeCode = "claude_code"
 
+	// 5: per-session origin (SessionState.Source, FirstAt; older states are discarded and transcripts re-read).
 	// 4: per-session active minutes (SessionState.Active; older states are discarded and transcripts re-read).
 	// 3: requests are split by folder (SessionState.Folders / Open; older states are discarded and transcripts re-read).
 	// 2: per-model totals are keyed by UsageKey.
-	stateVersion = 4
+	stateVersion = 5
 	// maxCounterKinds bounds the Ignored/Skipped maps; extra kinds share OtherKind.
 	maxCounterKinds = 64
 	OtherKind       = "_other"
@@ -116,6 +117,10 @@ type Row struct {
 	Cwd               string
 	GitBranch         string
 	ToolVersion       string
+	// Source is account.DirID of the Claude config directory the session was read from; FirstAt is the time of its first
+	// event. Both are Claude Code only: Copilot rows carry neither (the gate decides by Cwd).
+	Source  string
+	FirstAt time.Time
 	// ActiveSeconds is the session's active time (MinuteSet.Seconds), repeated on every row; 0 when no event had a time.
 	ActiveSeconds int64
 
@@ -188,6 +193,9 @@ type SessionState struct {
 	Cwd         string    `json:"cwd"`
 	GitBranch   string    `json:"git_branch"`
 	ToolVersion string    `json:"tool_version"`
+	// Source is a 16-hex digest of the config directory (never a path); FirstAt is the earliest event time.
+	Source  string    `json:"source,omitempty"`
+	FirstAt time.Time `json:"first_at,omitzero"`
 	// Folders holds the closed requests by folder inside the project (CollapsePath; "" = the project root); Open is
 	// the request in progress. Usage is keyed by UsageKey.String. Σ Folders + Open is the whole session.
 	Folders map[string]*FolderState `json:"folders,omitempty"`
@@ -263,21 +271,42 @@ func (s *SessionState) analysis() *Analysis {
 	return s.Analysis
 }
 
-// Add folds one parser event into the totals.
-func (a *Aggregator) Add(ev claudecode.Event) {
+// Add folds one parser event into the totals; the session gets no Source.
+func (a *Aggregator) Add(ev claudecode.Event) { a.AddFrom("", ev) }
+
+// AddFrom is Add for an event read from the config directory identified by source (account.DirID). The first
+// non-empty source of a session stays; FirstAt keeps the earliest event time.
+func (a *Aggregator) AddFrom(source string, ev claudecode.Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	var id string
+	var ts time.Time
 	switch e := ev.(type) {
 	case claudecode.AssistantUsage:
+		id, ts = e.SessionID, e.Timestamp
 		a.markActive(e.SessionID, e.Timestamp)
 		a.addUsage(e)
 	case claudecode.UserTurn:
+		id, ts = e.SessionID, e.Timestamp
 		a.markActive(e.SessionID, e.Timestamp)
 		a.addUser(e)
 	case claudecode.Ignored:
 		bump(a.counters.Ignored, e.Type)
+		return
 	case claudecode.Skipped:
 		bump(a.counters.Skipped, string(e.Reason))
+		return
+	default:
+		return
+	}
+	// Only a session the event actually created or touched is marked.
+	if s := a.sessions[id]; s != nil {
+		if s.Source == "" {
+			s.Source = source
+		}
+		if !ts.IsZero() && (s.FirstAt.IsZero() || ts.Before(s.FirstAt)) {
+			s.FirstAt = ts
+		}
 	}
 }
 
@@ -552,6 +581,7 @@ func (a *Aggregator) Rows() []Row {
 					Totals: m.Totals, WebSearchRequests: m.WebSearchRequests, WebFetchRequests: m.WebFetchRequests,
 					StartedAt: s.StartedAt, EndedAt: s.EndedAt,
 					Cwd: s.Cwd, GitBranch: s.GitBranch, ToolVersion: s.ToolVersion, ActiveSeconds: active,
+					Source: s.Source, FirstAt: s.FirstAt,
 					Folder: name, Parts: parts, MainFolder: main,
 					Topic: topic, Quality: quality, DetectorVersion: detector, SignalCoverage: ClaudeCodeCoverage,
 				}
