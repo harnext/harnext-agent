@@ -38,7 +38,7 @@ Yalnızca kendi Harnext sunucunuza, HTTPS üzerinden ve agent token'ınızla:
 | `POST /api/v1/ingest` | Oturum başına: araç, proje kimliği, konu etiketi, sayaçlar, model ve gün başına token sayıları, zamanlar, oturumun aktif süresi (saniye, `active_seconds`) ve klasör kırılımı (aşağıya bakın) |
 | `GET /api/v1/agent-config` | Token ve agent sürümü dışında sizinle ilgili bir şey yok. Sayaçları hesaplamak için kullanılan imzalı kuralları döner |
 | `GET /api/v1/agent-identity` | Yalnızca token. Bağladığınız hesapların imzalı listesini (tek yönlü hash'ler ve rota kimlikleri) döner; agent hangi oturumları göndereceğini böyle bilir |
-| `POST /api/v1/agent-accounts` | Bilgisayarınızda bulunan ve henüz bağlanmamış hesaplar: tek yönlü hash, `c***@gmail.com` gibi maskeli bir etiket, araç ve oturum sayısı. Böyle bir hesabın oturumları, hesabı panelden bağlayana kadar gönderilmez |
+| `POST /api/v1/agent-accounts` | Bilgisayarınızda bulunan ve henüz bağlanmamış hesaplar: tek yönlü hash, `dev***@gmail.com` gibi maskeli bir etiket (@ işaretinden önceki kısmın ilk birkaç karakteri ve alan adının tamamı), araç ve oturum sayısı. Böyle bir hesabın oturumları, hesabı panelden bağlayana kadar gönderilmez |
 | `GET /api/v1/agent-release` ve sürüm paketi | Güncelleme kontrolü. Paketler imza ve sha256 ile doğrulanır |
 
 Bir ingest isteği şu biçimdedir (kısaltılmış; tam şema [contracts/ingest.v1.schema.json](../contracts/ingest.v1.schema.json), eksiksiz örnek [contracts/testdata/ingest.v6.vector.json](../contracts/testdata/ingest.v6.vector.json)):

@@ -505,17 +505,22 @@ func TestBackfillFirstPacketWhenConfigNeverArrives(t *testing.T) {
 }
 
 // A configuration that arrives after the grace is picked up in the background; the first
-// packet has gone out without it.
+// packet has gone out without it. The server holds its answer until the first upload has been
+// seen, so the order does not depend on how fast the machine is.
 func TestBackfillLateConfigIsAppliedInTheBackground(t *testing.T) {
 	sc := loadSignedConfig(t)
 	slow := signedConfigHandler(sc)
+	answer := make(chan struct{})
+	var once sync.Once
+	releaseConfig := func() { once.Do(func() { close(answer) }) }
 	e := newBackfillEnv(t, func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case <-time.After(700 * time.Millisecond):
+		case <-answer:
 			slow(w, r)
 		case <-r.Context().Done():
 		}
 	})
+	t.Cleanup(releaseConfig)
 	writeSyntheticHistory(t, e.root)
 
 	_, stop := e.run(t, sc, func(o *RunOptions) { o.ConfigGrace = 100 * time.Millisecond })
@@ -524,6 +529,7 @@ func TestBackfillLateConfigIsAppliedInTheBackground(t *testing.T) {
 	if strings.Contains(raw[0], `"config_version"`) {
 		t.Errorf("first packet should predate the late configuration: %.200s", raw[0])
 	}
+	releaseConfig()
 	eventually(t, "late configuration loaded", func() bool {
 		s, err := e.paths.ReadStatus()
 		return err == nil && s.Config.Loaded && s.Config.Version == 2

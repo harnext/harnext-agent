@@ -38,7 +38,7 @@ Only to your Harnext server, over HTTPS, with your agent token:
 | `POST /api/v1/ingest` | Per session: tool, project identity, topic label, counters, token counts per model and day, timestamps, the session's active time in seconds (`active_seconds`), and a per-folder breakdown (see below) |
 | `GET /api/v1/agent-config` | Nothing about you except the token and the agent version. Returns the signed rules used to compute counters |
 | `GET /api/v1/agent-identity` | Nothing but the token. Returns the signed list of accounts you connected (one-way hashes and route ids), so the agent knows which sessions to send |
-| `POST /api/v1/agent-accounts` | Accounts found on your computer that are not connected yet: a one-way hash, a masked label such as `c***@gmail.com`, the tool and a session count. Sessions of such accounts are not sent until you connect the account in the panel |
+| `POST /api/v1/agent-accounts` | Accounts found on your computer that are not connected yet: a one-way hash, a masked label such as `dev***@gmail.com` (the first few characters of the part before the @ and the full domain), the tool and a session count. Sessions of such accounts are not sent until you connect the account in the panel |
 | `GET /api/v1/agent-release` and the release package | Update check. Packages are verified by signature and checksum |
 
 An ingest request has this shape (shortened; the full schema is [contracts/ingest.v1.schema.json](../contracts/ingest.v1.schema.json), a complete example is [contracts/testdata/ingest.v6.vector.json](../contracts/testdata/ingest.v6.vector.json)):

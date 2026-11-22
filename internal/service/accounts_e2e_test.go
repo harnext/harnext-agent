@@ -374,7 +374,7 @@ func TestAccountsEndToEnd(t *testing.T) {
 	// (b) The unbound account's session stays here and is reported with a masked label and its session count.
 	eventually(t, "unbound account reported", func() bool { return len(h.cloud.reportedAccounts(t)) > 0 })
 	accts := h.cloud.reportedAccounts(t)
-	if len(accts) != 1 || accts[0] != (identity.Account{Tool: identity.ToolClaudeCode, Hash: workHash, Label: "w***@example.test", Sessions30d: 1}) {
+	if len(accts) != 1 || accts[0] != (identity.Account{Tool: identity.ToolClaudeCode, Hash: workHash, Label: "wor***@example.test", Sessions30d: 1}) {
 		t.Fatalf("reported accounts = %+v", accts)
 	}
 	eventually(t, "status names the held back account", func() bool {
@@ -391,7 +391,7 @@ func TestAccountsEndToEnd(t *testing.T) {
 
 	// (f) The status file lists the skip reasons and holds no clear e-mail.
 	s := h.status(t)
-	if p := s.Accounts.Pending[0]; p.Label != "w***@example.test" || p.Sessions != 1 || p.Tool != identity.ToolClaudeCode {
+	if p := s.Accounts.Pending[0]; p.Label != "wor***@example.test" || p.Sessions != 1 || p.Tool != identity.ToolClaudeCode {
 		t.Fatalf("pending = %+v", p)
 	}
 	if s.Identity.Bindings != 1 || s.Upload.Skipped != 1 {
@@ -523,7 +523,7 @@ func TestAccountsCopilotMatchedByGitEmail(t *testing.T) {
 				if tc.want == "account_unbound" {
 					eventually(t, "copilot account reported", func() bool { return len(h.cloud.reportedAccounts(t)) > 0 })
 					accts := h.cloud.reportedAccounts(t)
-					if len(accts) != 1 || accts[0].Tool != identity.ToolVSCodeCopilot || accts[0].Label != "c***@example.test" || accts[0].Sessions30d != 1 {
+					if len(accts) != 1 || accts[0].Tool != identity.ToolVSCodeCopilot || accts[0].Label != "cop***@example.test" || accts[0].Sessions30d != 1 {
 						t.Fatalf("reported accounts = %+v", accts)
 					}
 				}

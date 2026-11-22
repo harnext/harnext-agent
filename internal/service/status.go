@@ -99,7 +99,7 @@ type IdentityStatus struct {
 	LastError string    `json:"last_error,omitempty"`
 }
 
-// PendingAccount is a detected account without a binding. Label is masked (c***@example.test); no e-mail or hash is kept.
+// PendingAccount is a detected account without a binding. Label is masked (dev***@example.test); no e-mail or hash is kept.
 type PendingAccount struct {
 	Tool     string `json:"tool"`
 	Label    string `json:"label"`

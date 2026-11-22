@@ -35,9 +35,9 @@ const (
 	emailOther = "bob.jones@other.example.test"
 	routeA     = "11111111-1111-4111-8111-111111111111"
 	routeB     = "22222222-2222-4222-8222-222222222222"
-	labelWork  = "j***@corp.example.test"
-	labelHome  = "a***@personal.example.test"
-	labelOther = "b***@other.example.test"
+	labelWork  = "jan***@corp.example.test"
+	labelHome  = "ali***@personal.example.test"
+	labelOther = "bob***@other.example.test"
 	testKID    = "k-test"
 	claude     = aggregate.ToolClaudeCode
 	copilot    = aggregate.ToolVSCodeCopilot

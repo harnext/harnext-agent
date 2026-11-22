@@ -15,6 +15,8 @@ import (
 const (
 	maxConfigSize = 64 << 20
 	maxDomainLen  = 60
+	// maxVisibleLocal is the number of leading characters of the local part that the masked label keeps.
+	maxVisibleLocal = 3
 )
 
 // Hash must stay equal to the server's public.account_email_hash.
@@ -23,7 +25,10 @@ func Hash(email string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// MaskLabel returns "c***@example.test"; it never contains the full local part, and "" for input that is not an e-mail.
+// MaskLabel returns "dev***@example.test": the first up to three characters of the local part, never more than half of it, then
+// "***" and the domain. It never contains the full local part (except for a one-character local part), and returns "" for input
+// that is not an e-mail. The label is for the user to recognise their own account in the panel; it is not a secret and is not
+// used to match accounts (the hash does that).
 func MaskLabel(email string) string {
 	email = strings.ToLower(strings.TrimSpace(email))
 	at := strings.LastIndex(email, "@")
@@ -34,7 +39,12 @@ func MaskLabel(email string) string {
 	if len(domain) > maxDomainLen {
 		domain = domain[:maxDomainLen]
 	}
-	return string(local[0]) + "***@" + string(domain)
+	return string(local[:visibleLocal(len(local))]) + "***@" + string(domain)
+}
+
+// visibleLocal is how many leading runes of a local part of n runes stay visible: three, but at most half, and at least one.
+func visibleLocal(n int) int {
+	return min(maxVisibleLocal, max(1, n/2))
 }
 
 // ClaudeEmail reads oauthAccount.emailAddress from the global config of a Claude Code config directory.

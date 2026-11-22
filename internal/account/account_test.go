@@ -26,11 +26,17 @@ func TestHash(t *testing.T) {
 func TestMaskLabel(t *testing.T) {
 	long := strings.Repeat("d", 100) + ".test"
 	cases := []struct{ name, in, want string }{
-		{"plain", "Carol@Gmail.test", "c***@gmail.test"},
-		{"spaces", "  carol@gmail.test ", "c***@gmail.test"},
+		{"five letters keep two", "Carol@Gmail.test", "ca***@gmail.test"},
+		{"spaces", "  carol@gmail.test ", "ca***@gmail.test"},
+		{"long local keeps three", "developer@example.test", "dev***@example.test"},
+		{"dotted local", "carol.longname@example.test", "car***@example.test"},
+		{"six letters keep three", "abcdef@x.test", "abc***@x.test"},
+		{"four letters keep two", "abcd@x.test", "ab***@x.test"},
+		{"three letters keep one", "abc@x.test", "a***@x.test"},
+		{"two letters keep one", "ab@x.test", "a***@x.test"},
 		{"one letter local", "c@gmail.test", "c***@gmail.test"},
-		{"multibyte first rune", "ëda@example.test", "ë***@example.test"},
-		{"long domain", "carol@" + long, "c***@" + strings.Repeat("d", 60)},
+		{"multibyte runes", "ëdaxyz@example.test", "ëda***@example.test"},
+		{"long domain", "carol@" + long, "ca***@" + strings.Repeat("d", 60)},
 		{"empty", "", ""},
 		{"no at", "carol", ""},
 		{"no local", "@example.test", ""},
@@ -45,8 +51,21 @@ func TestMaskLabel(t *testing.T) {
 			t.Errorf("%s: label too long: %d", c.name, utf8.RuneCountInString(got))
 		}
 	}
-	if got := MaskLabel("carol.longname@example.test"); strings.Contains(got, "carol") {
-		t.Errorf("label leaks the local part: %q", got)
+}
+
+// A masked label never carries the whole local part, whatever its length (one character is the unavoidable exception), and at
+// most three characters of it.
+func TestMaskLabelNeverRevealsTheLocalPart(t *testing.T) {
+	for n := 2; n <= 40; n++ {
+		local := strings.Repeat("x", n)
+		got := MaskLabel(local + "@example.test")
+		visible := strings.Index(got, "***")
+		if visible < 1 || visible > 3 || visible > n/2 {
+			t.Errorf("local part of %d letters: %q shows %d characters", n, got, visible)
+		}
+		if strings.Contains(got, local) {
+			t.Errorf("local part of %d letters leaks: %q", n, got)
+		}
 	}
 }
 
