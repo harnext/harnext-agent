@@ -65,10 +65,9 @@ func (p Paths) CopilotOTelFile(s Settings) string {
 type Paths struct {
 	Dir          string
 	Settings     string
-	Token        string
+	Accounts     string
 	DB           string
 	RemoteConfig string
-	IdentityFile string
 	Lock         string
 	Status       string
 }
@@ -89,10 +88,9 @@ func PathsIn(dir string) Paths {
 	return Paths{
 		Dir:          dir,
 		Settings:     filepath.Join(dir, "settings.json"),
-		Token:        filepath.Join(dir, "token"),
+		Accounts:     filepath.Join(dir, "accounts.json"),
 		DB:           filepath.Join(dir, "agent.db"),
 		RemoteConfig: filepath.Join(dir, "agent-config.json"),
-		IdentityFile: filepath.Join(dir, "agent-identity.json"),
 		Lock:         filepath.Join(dir, "agent.lock"),
 		Status:       filepath.Join(dir, "status.json"),
 	}
@@ -170,30 +168,6 @@ func (p Paths) LoadSettings() (Settings, error) {
 		return Settings{}, errors.New("service: settings file is invalid")
 	}
 	return s, nil
-}
-
-// SaveToken validates and writes the token (0600).
-func (p Paths) SaveToken(tok string) error {
-	if err := ValidateToken(tok); err != nil {
-		return err
-	}
-	return writeAtomic(p.Dir, p.Token, []byte(tok))
-}
-
-// LoadToken reads the token; the file may end with a newline.
-func (p Paths) LoadToken() (string, error) {
-	data, err := readLimited(p.Token, maxTokenLen+2)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", ErrNotInitialized
-	}
-	if err != nil {
-		return "", errors.New("service: read token")
-	}
-	tok := strings.TrimSpace(string(data))
-	if ValidateToken(tok) != nil {
-		return "", errors.New("service: token file is invalid")
-	}
-	return tok, nil
 }
 
 func readLimited(path string, max int64) ([]byte, error) {

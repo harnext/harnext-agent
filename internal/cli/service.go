@@ -31,7 +31,7 @@ func installService(env Env) (f svcmgr.File, restarted bool, err error) {
 	if _, err := env.Paths.LoadSettings(); err != nil {
 		return f, false, errors.New("not initialized: run `harnext-agent init` first")
 	}
-	if _, err := env.Paths.LoadToken(); err != nil {
+	if _, err := env.Paths.LoadAccounts(); err != nil {
 		return f, false, errors.New("not initialized: run `harnext-agent init` first")
 	}
 	o, err := env.serviceOptions()

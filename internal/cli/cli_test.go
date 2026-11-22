@@ -52,14 +52,56 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestLoginAddsAnAccountAndLogoutRemovesIt(t *testing.T) {
+	p := newPaths(t)
+	second := "hxt_" + strings.Repeat("S", 43)
+	if r := exec(t, p, tok+"\n", "init", "--token-stdin", "--server", "https://app.example.com"); r.failure != nil {
+		t.Fatal(r.failure)
+	}
+	// "login" is the same command; a second token adds a second account, the first one stays.
+	r := exec(t, p, second+"\n", "login", "--token-stdin", "--server", "https://app.example.com")
+	if r.failure != nil || !strings.Contains(r.out, "Saved account "+service.AccountID(second)) {
+		t.Fatalf("out=%q err=%v", r.out, r.failure)
+	}
+	if list, _ := p.LoadAccounts(); len(list) != 2 {
+		t.Fatalf("accounts = %+v", list)
+	}
+	// The same token again changes nothing.
+	exec(t, p, second+"\n", "login", "--token-stdin", "--server", "https://app.example.com")
+	if list, _ := p.LoadAccounts(); len(list) != 2 {
+		t.Fatalf("accounts after a repeat = %+v", list)
+	}
+	// With two accounts a bare logout is refused; an id prefix removes one.
+	if r := exec(t, p, "", "logout"); r.failure == nil || !strings.Contains(r.failure.Error(), "name the one to remove") {
+		t.Fatalf("bare logout: %v", r.failure)
+	}
+	if r := exec(t, p, "", "logout", "nosuchid"); r.failure == nil {
+		t.Fatal("unknown id accepted")
+	}
+	r = exec(t, p, "", "logout", service.AccountID(second)[:5])
+	if r.failure != nil || !strings.Contains(r.out, "Removed account "+service.AccountID(second)) {
+		t.Fatalf("out=%q err=%v", r.out, r.failure)
+	}
+	// The last account goes without an id.
+	if r := exec(t, p, "", "logout"); r.failure != nil {
+		t.Fatal(r.failure)
+	}
+	if _, err := p.LoadAccounts(); err != service.ErrNotInitialized {
+		t.Fatalf("after logout: %v", err)
+	}
+	if r := exec(t, p, "", "logout"); r.failure == nil {
+		t.Fatal("logout without an account succeeded")
+	}
+}
+
 func TestInit(t *testing.T) {
 	p := newPaths(t)
 	r := exec(t, p, tok+"\n", "init", "--token-stdin", "--server", "https://app.example.com")
 	if r.failure != nil || !strings.Contains(r.out, "Saved") {
 		t.Fatalf("out=%q err=%v", r.out, r.failure)
 	}
-	if got, err := p.LoadToken(); err != nil || got != tok {
-		t.Fatalf("token = %q err=%v", got, err)
+	if got, err := p.LoadAccounts(); err != nil || len(got) != 1 || got[0].Token != tok || !strings.Contains(r.out, got[0].ID) {
+		t.Fatalf("accounts = %+v err=%v out=%q", got, err, r.out)
 	}
 	if s, err := p.LoadSettings(); err != nil || s.ServerURL != "https://app.example.com" || s.AllowInsecureLocalhost {
 		t.Fatalf("settings = %+v err=%v", s, err)
@@ -104,7 +146,7 @@ func TestInitRejections(t *testing.T) {
 			if strings.Contains(r.failure.Error(), tok) {
 				t.Fatal("error echoes token")
 			}
-			if _, err := p.LoadToken(); err != service.ErrNotInitialized {
+			if _, err := p.LoadAccounts(); err != service.ErrNotInitialized {
 				t.Fatalf("token stored despite failure: %v", err)
 			}
 		})
@@ -120,7 +162,7 @@ func TestStatusStates(t *testing.T) {
 
 	exec(t, p, tok+"\n", "init", "--token-stdin", "--server", "https://app.example.com")
 	r = exec(t, p, "", "status")
-	for _, want := range []string{"Server:    app.example.com", "Token:     stored", "Agent:     not running", "no data yet"} {
+	for _, want := range []string{"Server:    app.example.com", "Token:     1 account stored", "Agent:     not running", "no data yet"} {
 		if !strings.Contains(r.out, want) {
 			t.Fatalf("status lacks %q:\n%s", want, r.out)
 		}
@@ -276,7 +318,7 @@ func TestServiceInstallAndUninstall(t *testing.T) {
 	if _, err := os.Stat(unit); !os.IsNotExist(err) {
 		t.Fatal("unit file still exists")
 	}
-	if _, err := p.LoadToken(); err != nil {
+	if _, err := p.LoadAccounts(); err != nil {
 		t.Fatalf("uninstall removed the token: %v", err)
 	}
 }

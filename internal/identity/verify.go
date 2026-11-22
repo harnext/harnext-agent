@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	PayloadVersion = 1
-	MaxBindings    = 256
+	PayloadVersion = 2
+	MaxBindings    = 2
 	MaxTTL         = 24 * time.Hour
 
 	ToolClaudeCode    = "claude_code"
@@ -23,14 +23,13 @@ const (
 
 var (
 	timestampRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`)
-	routeIDRE   = regexp.MustCompile(`^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$`)
 )
 
-// Binding maps one account (tool + account hash) to the server-side route id, which is opaque to the agent.
+// Binding is one tool account of the Harnext account the token belongs to: the Claude Code account hash (derived from the
+// sign-in e-mail) or the selected Copilot (GitHub) account hash.
 type Binding struct {
-	Tool    string
-	Hash    string
-	RouteID string
+	Tool string
+	Hash string
 }
 
 // Document is a verified identity document.
@@ -51,9 +50,8 @@ type rawDocument struct {
 }
 
 type rawBinding struct {
-	Tool    *string `json:"tool"`
-	Hash    *string `json:"hash"`
-	RouteID *string `json:"route_id"`
+	Tool *string `json:"tool"`
+	Hash *string `json:"hash"`
 }
 
 // Verify parses a JSON envelope body and verifies it. See VerifyEnvelope.
@@ -120,10 +118,10 @@ func parsePayload(p []byte) (Document, bool) {
 	type key struct{ tool, hash string }
 	seen := make(map[key]struct{}, len(*raw.Bindings))
 	for _, b := range *raw.Bindings {
-		if b == nil || b.Tool == nil || b.Hash == nil || b.RouteID == nil {
+		if b == nil || b.Tool == nil || b.Hash == nil {
 			return Document{}, false
 		}
-		if !validTool(*b.Tool) || !validHash(*b.Hash) || !routeIDRE.MatchString(*b.RouteID) {
+		if !validTool(*b.Tool) || !validHash(*b.Hash) {
 			return Document{}, false
 		}
 		k := key{*b.Tool, *b.Hash}
@@ -131,7 +129,7 @@ func parsePayload(p []byte) (Document, bool) {
 			return Document{}, false
 		}
 		seen[k] = struct{}{}
-		doc.Bindings = append(doc.Bindings, Binding{Tool: *b.Tool, Hash: *b.Hash, RouteID: *b.RouteID})
+		doc.Bindings = append(doc.Bindings, Binding{Tool: *b.Tool, Hash: *b.Hash})
 	}
 	return doc, true
 }

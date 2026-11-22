@@ -107,7 +107,7 @@ func newUploader(t *testing.T, url string, l Ledger) (*Uploader, *[]time.Duratio
 	t.Helper()
 	var sleeps []time.Duration
 	u, err := New(Options{
-		BaseURL: url, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
+		BaseURL: url, Token: func(string) string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
 		Ledger: l, AllowInsecureLocalhost: true, Gate: testGate,
 		Sleep: func(_ context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil },
 	})
@@ -486,7 +486,7 @@ func TestBodySizeLimitSplitsBatches(t *testing.T) {
 	ts := s.start()
 	defer ts.Close()
 	u, err := New(Options{
-		BaseURL: ts.URL, Token: func() string { return "t" }, AgentVersion: "0.1.0", Ledger: newLedger(),
+		BaseURL: ts.URL, Token: func(string) string { return "t" }, AgentVersion: "0.1.0", Ledger: newLedger(),
 		AllowInsecureLocalhost: true, MaxBodyBytes: 1000, Gate: testGate,
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	})
@@ -517,7 +517,7 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 }
 
 func TestNewValidation(t *testing.T) {
-	tok := func() string { return "t" }
+	tok := func(string) string { return "t" }
 	ok := Options{Token: tok, AgentVersion: "0.1.0", Ledger: newLedger()}
 	for name, c := range map[string]struct {
 		url      string
@@ -557,7 +557,7 @@ func TestNoTokenSendsNothing(t *testing.T) {
 	s := &server{t: t, handler: func(w http.ResponseWriter, b map[string]any) { okHandler(w, b) }}
 	ts := s.start()
 	defer ts.Close()
-	u, err := New(Options{BaseURL: ts.URL, Token: func() string { return "" }, AgentVersion: "0.1.0",
+	u, err := New(Options{BaseURL: ts.URL, Token: func(string) string { return "" }, AgentVersion: "0.1.0",
 		Ledger: newLedger(), AllowInsecureLocalhost: true, Gate: testGate})
 	if err != nil {
 		t.Fatal(err)
@@ -570,7 +570,7 @@ func TestNoTokenSendsNothing(t *testing.T) {
 }
 
 func TestNextWaitBackoff(t *testing.T) {
-	u, _ := New(Options{BaseURL: "https://a.b", Token: func() string { return "t" }, AgentVersion: "1",
+	u, _ := New(Options{BaseURL: "https://a.b", Token: func(string) string { return "t" }, AgentVersion: "1",
 		Ledger: newLedger(), Rand: func() float64 { return 0.5 }})
 	period := 5 * time.Minute
 	f := 0
@@ -601,7 +601,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 	ts := s.start()
 	defer ts.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	u, err := New(Options{BaseURL: ts.URL, Token: func() string { return "t" }, AgentVersion: "0.1.0",
+	u, err := New(Options{BaseURL: ts.URL, Token: func(string) string { return "t" }, AgentVersion: "0.1.0",
 		Ledger: newLedger(), AllowInsecureLocalhost: true, Gate: testGate,
 		Sleep: func(ctx context.Context, _ time.Duration) error { cancel(); return ctx.Err() },
 	})
@@ -743,7 +743,7 @@ func TestBacklogHeaderIsSentOnEveryRequest(t *testing.T) {
 	defer ts.Close()
 	remaining := 41
 	u, err := New(Options{
-		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
+		BaseURL: ts.URL, Token: func(string) string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
 		Ledger: newLedger(), AllowInsecureLocalhost: true, Backlog: func() int { return remaining }, Gate: testGate,
 	})
 	if err != nil {
@@ -789,7 +789,7 @@ func TestBacklogTotalHeader(t *testing.T) {
 	defer ts.Close()
 	total := 305
 	u, err := New(Options{
-		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
+		BaseURL: ts.URL, Token: func(string) string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
 		Ledger: newLedger(), AllowInsecureLocalhost: true, BacklogTotal: func() int { return total }, Gate: testGate,
 	})
 	if err != nil {
@@ -814,7 +814,7 @@ func TestGateSkipsSessionsSilently(t *testing.T) {
 	defer ts.Close()
 	l := newLedger()
 	u, err := New(Options{
-		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
+		BaseURL: ts.URL, Token: func(string) string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
 		Ledger: l, AllowInsecureLocalhost: true,
 		Gate: func(r aggregate.Row) Decision {
 			if r.SessionID == "private" {
@@ -844,7 +844,7 @@ func TestNilGateSendsNothing(t *testing.T) {
 	s := &server{t: t, handler: func(w http.ResponseWriter, b map[string]any) { okHandler(w, b) }}
 	ts := s.start()
 	defer ts.Close()
-	u, err := New(Options{BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0", Ledger: newLedger(), AllowInsecureLocalhost: true})
+	u, err := New(Options{BaseURL: ts.URL, Token: func(string) string { return "hxt_secret-token" }, AgentVersion: "0.1.0", Ledger: newLedger(), AllowInsecureLocalhost: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func TestRouteChangeResendsSession(t *testing.T) {
 	defer ts.Close()
 	route := "route-a"
 	u, err := New(Options{
-		BaseURL: ts.URL, Token: func() string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
+		BaseURL: ts.URL, Token: func(string) string { return "hxt_secret-token" }, AgentVersion: "0.1.0",
 		Ledger: newLedger(), AllowInsecureLocalhost: true,
 		Gate: func(aggregate.Row) Decision { return Decision{Send: true, AccountHash: testHash, RouteID: route} },
 	})

@@ -7,12 +7,12 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/harnext/harnext-agent/internal/account"
 	"github.com/harnext/harnext-agent/internal/aggregate"
+	"github.com/harnext/harnext-agent/internal/copilotid"
 	"github.com/harnext/harnext-agent/internal/identity"
 	"github.com/harnext/harnext-agent/internal/uploader"
 	"github.com/harnext/harnext-agent/internal/watcher"
@@ -20,43 +20,53 @@ import (
 
 // Reasons are stable lowercase codes; they are the only content of a skip.
 const (
-	ReasonNoAccount       = "no_account"
-	ReasonGitEmailMissing = "git_email_missing"
+	// ReasonNoAccount: no Claude Code account was signed in when the session started.
+	ReasonNoAccount = "no_account"
+	// ReasonCopilotUnknown: the GitHub account behind a Copilot session could not be determined.
+	ReasonCopilotUnknown = "copilot_account_unknown"
+	// ReasonIdentityPending: no Harnext account on this machine holds a valid signed identity document yet.
 	ReasonIdentityPending = "identity_pending"
+	// ReasonNoMatch: the session's tool account is not the account of any Harnext account on this machine (for Claude Code the
+	// sign-in e-mail differs from every Harnext e-mail; for Copilot the GitHub account is not the selected one).
+	ReasonNoMatch = "no_matching_account"
+	// ReasonAccountUnbound: the server refused the session (set by the uploader's answer, listed here for status output).
 	ReasonAccountUnbound  = "account_unbound"
 	ReasonUnsupportedTool = "unsupported_tool"
 )
 
 const (
-	cacheTTL             = 30 * time.Second
-	candidateWindow      = 30 * 24 * time.Hour
-	maxCandidates        = 64
-	maxCandidateSessions = 2000
-	maxTrackedSessions   = 5000
-	maxCwdCache          = 1024
-	maxLabels            = 64
-	maxGapsPerDir        = 8
-	transientGap         = 2 * time.Minute
-	rereadAfter          = 10 * time.Minute
-	prunePeriod          = time.Minute
-	defaultLimit         = identity.MaxAccountsPerReport
+	maxTrackedSessions = 5000
+	maxLabels          = 64
+	maxGapsPerDir      = 8
+	transientGap       = 2 * time.Minute
+	rereadAfter        = 10 * time.Minute
 )
 
 // IdentitySource is satisfied by *identity.Manager.
 type IdentitySource interface{ Current() identity.Snapshot }
 
-// EmailResolver is satisfied by *gitid.Resolver.
-type EmailResolver interface {
-	Email(dir string) (email string, ok bool)
+// Account is one Harnext account (one agent token) on this machine. ID is the opaque local id the uploader routes by.
+type Account struct {
+	ID       string
+	Identity IdentitySource
+}
+
+// CopilotSource is satisfied by *copilotid.Reader.
+type CopilotSource interface {
+	Read() (copilotid.State, bool)
 }
 
 type Options struct {
-	Home     string
-	Roots    func() []watcher.Root
-	Identity IdentitySource // nil: nothing is sent (identity_pending)
-	Git      EmailResolver  // nil: Copilot rows get git_email_missing
+	Home  string
+	Roots func() []watcher.Root
+	// Accounts are the Harnext accounts whose identity documents decide where a session goes; none: nothing is sent.
+	Accounts []Account
 	Timeline *account.Timeline
-	Now      func() time.Time // default time.Now
+	// Copilot reads the editor's state database (nil: Copilot sessions get copilot_account_unknown); CopilotTimeline holds what
+	// it showed over time.
+	Copilot         CopilotSource
+	CopilotTimeline *copilotid.Timeline
+	Now             func() time.Time // default time.Now
 	// ReadClaudeEmail defaults to account.ClaudeEmail.
 	ReadClaudeEmail func(configDir, home string) (string, bool)
 	// Stat reports size and mtime of a Claude global config so an unchanged file is not parsed again; default os.Lstat.
@@ -68,9 +78,7 @@ type Stats struct {
 	// Skipped counts distinct sessions per reason by their latest verdict since the process started (each reason tracks at
 	// most 5000); a session that was later sent or skipped for another reason leaves its earlier reason.
 	Skipped map[string]int
-	Bound   int      // distinct sessions that were allowed to be sent
-	Pending int      // candidate accounts without a binding
-	Labels  []string // masked labels of the pending candidates, most sessions first (at most 20)
+	Bound   int // distinct sessions that were allowed to be sent
 }
 
 type stamp struct {
@@ -87,20 +95,6 @@ type dirState struct {
 	lastHash  string
 	noneSince time.Time // zero while an account is present
 	gaps      []gap
-}
-
-type cwdEntry struct {
-	hash, label string
-	ok          bool
-	at          time.Time
-}
-
-type candKey struct{ tool, hash string }
-
-type candidate struct {
-	label    string
-	seen     time.Time
-	sessions *sessionSet
 }
 
 // sessionSet holds 64-bit digests of session ids with the time they were last seen; it stops growing at max.
@@ -142,16 +136,13 @@ func sessionDigest(tool, sessionID string) uint64 {
 type Gate struct {
 	opts Options
 	tl   *account.Timeline
+	cop  *copilotid.Timeline
 
-	mu        sync.Mutex
-	dirs      map[string]*dirState
-	labels    map[string]string // account hash -> masked label of Claude accounts
-	cwds      map[string]cwdEntry
-	cands     map[candKey]*candidate
-	changed   bool
-	lastPrune time.Time
-	skipped   map[string]*sessionSet
-	bound     *sessionSet
+	mu      sync.Mutex
+	dirs    map[string]*dirState
+	labels  map[string]string // account hash -> masked label of Claude accounts
+	skipped map[string]*sessionSet
+	bound   *sessionSet
 }
 
 func New(opts Options) *Gate {
@@ -168,10 +159,14 @@ func New(opts Options) *Gate {
 	if tl == nil {
 		tl = &account.Timeline{}
 	}
+	cop := opts.CopilotTimeline
+	if cop == nil {
+		cop = &copilotid.Timeline{}
+	}
 	return &Gate{
-		opts: opts, tl: tl,
-		dirs: map[string]*dirState{}, labels: map[string]string{}, cwds: map[string]cwdEntry{},
-		cands: map[candKey]*candidate{}, skipped: map[string]*sessionSet{}, bound: newSessionSet(maxTrackedSessions),
+		opts: opts, tl: tl, cop: cop,
+		dirs: map[string]*dirState{}, labels: map[string]string{},
+		skipped: map[string]*sessionSet{}, bound: newSessionSet(maxTrackedSessions),
 	}
 }
 
@@ -194,6 +189,11 @@ func configPath(dir, home string) string {
 
 // ObserveAccounts reads the account of every Claude root and feeds the timeline. Call it at start and periodically.
 func (g *Gate) ObserveAccounts() {
+	if g.opts.Copilot != nil {
+		if st, ok := g.opts.Copilot.Read(); ok {
+			g.cop.Observe(st, g.opts.Now())
+		}
+	}
 	if g.opts.Roots == nil {
 		return
 	}
@@ -260,41 +260,41 @@ func (g *Gate) readAccount(dir string) (hash, label string, ok bool) {
 	return account.Hash(email), account.MaskLabel(email), true
 }
 
-// Decide answers for one session (call it with the session's first row).
+// Decide answers for one session (call it with the session's first row). The session goes out under the first Harnext account
+// of this machine whose identity document holds the session's tool account; the token of that account is used for the upload.
 func (g *Gate) Decide(row aggregate.Row) uploader.Decision {
 	now := g.opts.Now()
-	var hash, label, reason string
+	var hash, reason string
 	switch row.Tool {
 	case aggregate.ToolClaudeCode:
-		hash, label, reason = g.claudeAccount(row)
+		hash, reason = g.claudeAccount(row)
 	case aggregate.ToolVSCodeCopilot:
-		hash, label, reason = g.copilotAccount(row.Cwd, now)
+		hash, reason = g.copilotAccount(row)
 	default:
 		reason = ReasonUnsupportedTool
 	}
 	if reason != "" {
 		return g.skip(row, reason, now)
 	}
-	snap := g.snapshot()
-	if !snap.Valid() {
+	valid := false
+	for _, a := range g.opts.Accounts {
+		snap := a.Identity.Current()
+		if !snap.Valid() {
+			continue
+		}
+		valid = true
+		if snap.Bound(row.Tool, hash) {
+			g.markBound(row, now)
+			return uploader.Decision{Send: true, AccountHash: hash, RouteID: a.ID}
+		}
+	}
+	if !valid {
 		return g.skip(row, ReasonIdentityPending, now)
 	}
-	if route, ok := snap.RouteFor(row.Tool, hash); ok {
-		g.markBound(row, hash, now)
-		return uploader.Decision{Send: true, AccountHash: hash, RouteID: route}
-	}
-	g.recordCandidate(row, hash, label, now)
-	return g.skip(row, ReasonAccountUnbound, now)
+	return g.skip(row, ReasonNoMatch, now)
 }
 
-func (g *Gate) snapshot() identity.Snapshot {
-	if g.opts.Identity == nil {
-		return identity.Snapshot{}
-	}
-	return g.opts.Identity.Current()
-}
-
-func (g *Gate) claudeAccount(row aggregate.Row) (hash, label, reason string) {
+func (g *Gate) claudeAccount(row aggregate.Row) (hash, reason string) {
 	at := row.FirstAt
 	if at.IsZero() {
 		at = row.StartedAt
@@ -303,43 +303,33 @@ func (g *Gate) claudeAccount(row aggregate.Row) (hash, label, reason string) {
 	defer g.mu.Unlock()
 	if st := g.dirs[row.Source]; st != nil {
 		if !st.noneSince.IsZero() && !at.Before(st.noneSince) {
-			return "", "", ReasonNoAccount
+			return "", ReasonNoAccount
 		}
 		for _, gp := range st.gaps {
 			if !at.Before(gp.from) && at.Before(gp.to) {
-				return "", "", ReasonNoAccount
+				return "", ReasonNoAccount
 			}
 		}
 	}
 	h, ok := g.tl.HashAt(row.Source, at)
 	if !ok {
-		return "", "", ReasonNoAccount
+		return "", ReasonNoAccount
 	}
-	return h, g.labels[h], ""
+	return h, ""
 }
 
-func (g *Gate) copilotAccount(cwd string, now time.Time) (hash, label, reason string) {
-	g.mu.Lock()
-	e, hit := g.cwds[cwd]
-	g.mu.Unlock()
-	if !hit || now.Sub(e.at) < 0 || now.Sub(e.at) >= cacheTTL {
-		e = cwdEntry{at: now}
-		if g.opts.Git != nil {
-			if email, ok := g.opts.Git.Email(cwd); ok && email != "" {
-				e.hash, e.label, e.ok = account.Hash(email), account.MaskLabel(email), true
-			}
-		}
-		g.mu.Lock()
-		if len(g.cwds) >= maxCwdCache {
-			g.cwds = map[string]cwdEntry{}
-		}
-		g.cwds[cwd] = e
-		g.mu.Unlock()
+// copilotAccount is the hash of the GitHub account that was active in VS Code when the session started. A session is not
+// attributed when that account cannot be determined (fail closed).
+func (g *Gate) copilotAccount(row aggregate.Row) (hash, reason string) {
+	at := row.FirstAt
+	if at.IsZero() {
+		at = row.StartedAt
 	}
-	if !e.ok {
-		return "", "", ReasonGitEmailMissing
+	h, _, ok := g.cop.HashAt(at)
+	if !ok {
+		return "", ReasonCopilotUnknown
 	}
-	return e.hash, e.label, ""
+	return h, ""
 }
 
 func (g *Gate) skip(row aggregate.Row, reason string, now time.Time) uploader.Decision {
@@ -366,129 +356,15 @@ func (g *Gate) forgetLocked(digest uint64, keep string) {
 	}
 }
 
-func (g *Gate) markBound(row aggregate.Row, hash string, now time.Time) {
+func (g *Gate) markBound(row aggregate.Row, now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.forgetLocked(sessionDigest(row.Tool, row.SessionID), "")
 	g.bound.add(sessionDigest(row.Tool, row.SessionID), now)
-	k := candKey{row.Tool, hash}
-	if _, ok := g.cands[k]; ok {
-		delete(g.cands, k)
-		g.changed = true
-	}
 }
 
-func (g *Gate) recordCandidate(row aggregate.Row, hash, label string, now time.Time) {
-	if label == "" {
-		return
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if now.Sub(g.lastPrune) >= prunePeriod {
-		g.pruneLocked(now)
-	}
-	k := candKey{row.Tool, hash}
-	c := g.cands[k]
-	if c == nil {
-		if identity.ValidateAccounts([]identity.Account{{Tool: row.Tool, Hash: hash, Label: label}}) != nil {
-			return
-		}
-		if len(g.cands) >= maxCandidates {
-			g.evictLocked()
-		}
-		c = &candidate{label: label, sessions: newSessionSet(maxCandidateSessions)}
-		g.cands[k] = c
-		g.changed = true
-	}
-	c.seen = now
-	if c.sessions.add(sessionDigest(row.Tool, row.SessionID), now) {
-		g.changed = true
-	}
-}
-
-// evictLocked drops the candidate with the fewest sessions, the least recently seen first.
-func (g *Gate) evictLocked() {
-	var worst candKey
-	var wc *candidate
-	for k, c := range g.cands {
-		if wc == nil || len(c.sessions.m) < len(wc.sessions.m) ||
-			(len(c.sessions.m) == len(wc.sessions.m) && c.seen.Before(wc.seen)) {
-			worst, wc = k, c
-		}
-	}
-	if wc != nil {
-		delete(g.cands, worst)
-		g.changed = true
-	}
-}
-
-func (g *Gate) pruneLocked(now time.Time) {
-	g.lastPrune = now
-	cutoff := now.Add(-candidateWindow)
-	for k, c := range g.cands {
-		removed := c.sessions.prune(cutoff)
-		if len(c.sessions.m) == 0 {
-			delete(g.cands, k)
-			g.changed = true
-		} else if removed > 0 {
-			g.changed = true
-		}
-	}
-}
-
-// pendingLocked prunes, forgets candidates that became bound and returns the rest, most sessions first.
-func (g *Gate) pendingLocked(now time.Time, snap identity.Snapshot) []identity.Account {
-	g.pruneLocked(now)
-	out := make([]identity.Account, 0, len(g.cands))
-	for k, c := range g.cands {
-		if _, bound := snap.RouteFor(k.tool, k.hash); bound {
-			delete(g.cands, k)
-			g.changed = true
-			continue
-		}
-		out = append(out, identity.Account{Tool: k.tool, Hash: k.hash, Label: c.label, Sessions30d: min(len(c.sessions.m), identity.MaxSessions30d)})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		switch {
-		case a.Sessions30d != b.Sessions30d:
-			return a.Sessions30d > b.Sessions30d
-		case a.Label != b.Label:
-			return a.Label < b.Label
-		case a.Tool != b.Tool:
-			return a.Tool < b.Tool
-		}
-		return a.Hash < b.Hash
-	})
-	return out
-}
-
-// Candidates returns up to limit (default and maximum 20) unbound accounts, most sessions first.
-func (g *Gate) Candidates(limit int) []identity.Account {
-	if limit <= 0 || limit > defaultLimit {
-		limit = defaultLimit
-	}
-	snap := g.snapshot()
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	out := g.pendingLocked(g.opts.Now(), snap)
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out
-}
-
-// CandidatesChanged is true once after the candidate set or a session count changed.
-func (g *Gate) CandidatesChanged() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	c := g.changed
-	g.changed = false
-	return c
-}
-
+// Stats returns what the gate decided so far.
 func (g *Gate) Stats() Stats {
-	snap := g.snapshot()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	st := Stats{Skipped: make(map[string]int, len(g.skipped)), Bound: len(g.bound.m)}
@@ -497,18 +373,66 @@ func (g *Gate) Stats() Stats {
 			st.Skipped[reason] = len(s.m)
 		}
 	}
-	pending := g.pendingLocked(g.opts.Now(), snap)
-	st.Pending = len(pending)
-	for i, a := range pending {
-		if i == defaultLimit {
-			break
-		}
-		st.Labels = append(st.Labels, a.Label)
-	}
 	return st
 }
+
+// ClaudeFound is the number of distinct Claude Code accounts currently signed in on this machine (at most 20).
+func (g *Gate) ClaudeFound() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.currentHashesLocked())
+}
+
+func (g *Gate) currentHashesLocked() map[string]string {
+	out := map[string]string{}
+	for _, st := range g.dirs {
+		if st.noneSince.IsZero() && st.lastHash != "" {
+			out[st.lastHash] = g.labels[st.lastHash]
+		}
+	}
+	return out
+}
+
+// ReportFor builds the account report for one Harnext account from its identity document: how many Claude Code accounts are
+// signed in here and whether one is this Harnext account's own; the GitHub accounts found (all of them while no Copilot account
+// is selected, only the selected one afterwards). ok is false while the account holds no valid document, because "matched"
+// cannot be known without its hash.
+func (g *Gate) ReportFor(a Account) (rep identity.Report, ok bool) {
+	snap := a.Identity.Current()
+	if !snap.Valid() {
+		return identity.Report{}, false
+	}
+	g.mu.Lock()
+	cur := g.currentHashesLocked()
+	g.mu.Unlock()
+	rep.Claude.Found = min(len(cur), identity.MaxClaudeAccounts)
+	if h, has := snap.HashFor(identity.ToolClaudeCode); has {
+		if label, in := cur[h]; in && label != "" {
+			rep.Claude.Matched, rep.Claude.Label = true, label
+		}
+	}
+	rep.Copilot.Logins = []identity.CopilotLogin{}
+	selected, hasSel := snap.HashFor(identity.ToolVSCodeCopilot)
+	for _, l := range g.cop.Logins() {
+		if hasSel && l.IDHash != selected {
+			continue
+		}
+		if len(rep.Copilot.Logins) >= identity.MaxCopilotLogins {
+			break
+		}
+		rep.Copilot.Logins = append(rep.Copilot.Logins, identity.CopilotLogin{Login: l.Login, IDHash: l.IDHash, Plan: l.Plan})
+	}
+	return rep, true
+}
+
+// CopilotLogins is the number of GitHub accounts found on this machine.
+func (g *Gate) CopilotLogins() int { return len(g.cop.Logins()) }
 
 // TimelineSnapshot is the JSON the service stores between runs.
 func (g *Gate) TimelineSnapshot() []byte { return g.tl.Snapshot() }
 
 func (g *Gate) RestoreTimeline(data []byte) error { return g.tl.Restore(data) }
+
+// CopilotSnapshot is the JSON of the GitHub account history the service stores between runs; it holds user names, hashes
+// and plans only.
+func (g *Gate) CopilotSnapshot() []byte { return g.cop.Snapshot() }

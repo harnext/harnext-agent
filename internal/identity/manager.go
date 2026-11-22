@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	DefaultPeriod      = 5 * time.Minute
+	// DefaultPeriod: a short period makes a change made in the panel (a Copilot account chosen or released) reach the agent within
+	// a couple of minutes; an unchanged document is a cheap 304 (the server limit is 6 requests a minute per token).
+	DefaultPeriod      = 2 * time.Minute
 	defaultJitter      = 0.1
 	defaultBaseBackoff = time.Minute
 	// etagMinRemaining: a cached document with less validity left is refetched without If-None-Match. The server re-signs
@@ -21,7 +23,7 @@ const (
 // Remote is satisfied by *Client.
 type Remote interface {
 	Fetch(ctx context.Context, ifNoneMatch string) (*FetchResult, error)
-	Report(ctx context.Context, accounts []Account) (*FetchResult, error)
+	Report(ctx context.Context, report Report) (*FetchResult, error)
 }
 
 // Persister is satisfied by *Store.
@@ -57,7 +59,7 @@ type ManagerOptions struct {
 	BaseBackoff time.Duration
 	Rand        func() float64 // [0,1); default math/rand/v2
 	// OnChange runs (outside any lock, in the goroutine that adopted the document) after a document is adopted that makes the
-	// document valid again or changes the (tool, hash) -> route set. It does not fire for expiry or at construction.
+	// document valid again or changes the set of bound (tool, hash) accounts. It does not fire for expiry or at construction.
 	OnChange func()
 }
 
@@ -84,20 +86,35 @@ type Snapshot struct {
 	version   int64
 	issuedAt  time.Time
 	expiresAt time.Time
-	routes    map[routeKey]string
+	bound     map[routeKey]struct{}
 	now       func() time.Time
 }
 
 // Valid reports whether a verified document is held and not yet expired.
 func (s Snapshot) Valid() bool { return s.now != nil && s.now().Before(s.expiresAt) }
 
-// RouteFor returns the route id bound to (tool, hash); false when there is no binding or the document is not valid.
-func (s Snapshot) RouteFor(tool, hash string) (routeID string, ok bool) {
+// Bound reports whether (tool, hash) is an account of the Harnext account this document belongs to; false when there is no
+// such binding or the document is not valid.
+func (s Snapshot) Bound(tool, hash string) bool {
+	if !s.Valid() {
+		return false
+	}
+	_, ok := s.bound[routeKey{tool, hash}]
+	return ok
+}
+
+// HashFor returns the account hash the document holds for the tool (one per tool at most); false without one or when the
+// document is not valid.
+func (s Snapshot) HashFor(tool string) (string, bool) {
 	if !s.Valid() {
 		return "", false
 	}
-	routeID, ok = s.routes[routeKey{tool, hash}]
-	return routeID, ok
+	for k := range s.bound {
+		if k.tool == tool {
+			return k.hash, true
+		}
+	}
+	return "", false
 }
 
 // IdentityVersion is the document's content fingerprint (equality only); 0 without a document.
@@ -166,18 +183,18 @@ func NewManager(opts ManagerOptions) *Manager {
 }
 
 func (m *Manager) setLocked(doc Document, env remoteconfig.Envelope, etag string) {
-	routes := make(map[routeKey]string, len(doc.Bindings))
+	bound := make(map[routeKey]struct{}, len(doc.Bindings))
 	for _, b := range doc.Bindings {
-		routes[routeKey{b.Tool, b.Hash}] = b.RouteID
+		bound[routeKey{b.Tool, b.Hash}] = struct{}{}
 	}
 	m.doc, m.env, m.etag = &doc, env, etag
-	m.snap = Snapshot{version: doc.IdentityVersion, issuedAt: doc.IssuedAt, expiresAt: doc.ExpiresAt, routes: routes, now: m.clock.Now}
+	m.snap = Snapshot{version: doc.IdentityVersion, issuedAt: doc.IssuedAt, expiresAt: doc.ExpiresAt, bound: bound, now: m.clock.Now}
 	if doc.IssuedAt.After(m.floor) {
 		m.floor = doc.IssuedAt
 	}
 }
 
-// Current returns the current snapshot. Check Valid (or use RouteFor, which does) on every use.
+// Current returns the current snapshot. Check Valid (or use Bound and HashFor, which do) on every use.
 func (m *Manager) Current() Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -224,15 +241,15 @@ func (m *Manager) Refresh(ctx context.Context) error {
 	return m.adopt(res.Envelope, res.ETag)
 }
 
-// Report sends the accounts and adopts the verified document from the response. An invalid report is not sent.
-func (m *Manager) Report(ctx context.Context, accounts []Account) error {
+// Report sends the report and adopts the verified document from the response. An invalid report is not sent.
+func (m *Manager) Report(ctx context.Context, report Report) error {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
 
 	if len(m.opts.Keys) == 0 {
 		return m.fail(newError(CodeNoTrustedKeys))
 	}
-	res, err := m.opts.Remote.Report(ctx, accounts)
+	res, err := m.opts.Remote.Report(ctx, report)
 	if err != nil {
 		return m.fail(err)
 	}
@@ -265,9 +282,9 @@ func (m *Manager) adopt(env remoteconfig.Envelope, etag string) error {
 		return err
 	}
 	wasValid := m.snap.Valid()
-	old := m.snap.routes
+	old := m.snap.bound
 	m.setLocked(doc, env, etag)
-	changed := !wasValid || !sameRoutes(old, m.snap.routes)
+	changed := !wasValid || !sameRoutes(old, m.snap.bound)
 	m.lastCheck, m.lastErr = now, ""
 	m.persistLocked()
 	m.mu.Unlock()
@@ -277,12 +294,12 @@ func (m *Manager) adopt(env remoteconfig.Envelope, etag string) error {
 	return nil
 }
 
-func sameRoutes(a, b map[routeKey]string) bool {
+func sameRoutes(a, b map[routeKey]struct{}) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for k, v := range a {
-		if bv, ok := b[k]; !ok || bv != v {
+	for k := range a {
+		if _, ok := b[k]; !ok {
 			return false
 		}
 	}

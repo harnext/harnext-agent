@@ -25,8 +25,6 @@ const (
 	testToken = "hxt_test_token_value"
 	hashA     = "d6efef1a21eecb179c76f57270cfe06ff1c84db42608a7a0f2721bea5846a038"
 	hashB     = "a467a71ed5d452565647e3cd1697cd24f69634090cf3b7a2b60b0cc488839a85"
-	routeA    = "11111111-1111-4111-8111-111111111111"
-	routeB    = "22222222-2222-4222-8222-222222222222"
 )
 
 var t0 = time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
@@ -66,24 +64,20 @@ func fingerprint(bs []Binding) int64 {
 		if a.Tool != b.Tool {
 			return a.Tool < b.Tool
 		}
-		if a.Hash != b.Hash {
-			return a.Hash < b.Hash
-		}
-		return a.RouteID < b.RouteID
+		return a.Hash < b.Hash
 	})
 	h := sha256.New()
-	h.Write([]byte("harnext:identity:v1\n"))
+	h.Write([]byte("harnext:identity:v2\n"))
 	for _, b := range sorted {
-		fmt.Fprintf(h, "%s\t%s\t%s\n", b.Tool, b.Hash, b.RouteID)
+		fmt.Fprintf(h, "%s\t%s\n", b.Tool, b.Hash)
 	}
 	sum := h.Sum(nil)
 	return int64(binary.BigEndian.Uint64(append([]byte{0, 0}, sum[:6]...)))
 }
 
 type jsonBinding struct {
-	Tool    string `json:"tool"`
-	Hash    string `json:"hash"`
-	RouteID string `json:"route_id"`
+	Tool string `json:"tool"`
+	Hash string `json:"hash"`
 }
 
 func payloadFor(issued, expires time.Time, bs []Binding) []byte {
@@ -92,7 +86,7 @@ func payloadFor(issued, expires time.Time, bs []Binding) []byte {
 		jb = append(jb, jsonBinding(b))
 	}
 	p, _ := json.Marshal(map[string]any{
-		"payload_version": 1, "identity_version": fingerprint(bs),
+		"payload_version": 2, "identity_version": fingerprint(bs),
 		"issued_at": ts(issued), "expires_at": ts(expires), "bindings": jb,
 	})
 	return p
@@ -105,8 +99,8 @@ func (s signer) envelopeAt(issued time.Time, bs []Binding) remoteconfig.Envelope
 
 func defaultBindings() []Binding {
 	return []Binding{
-		{ToolClaudeCode, hashA, routeA},
-		{ToolVSCodeCopilot, hashB, routeB},
+		{ToolClaudeCode, hashA},
+		{ToolVSCodeCopilot, hashB},
 	}
 }
 
@@ -128,7 +122,7 @@ type fakeServer struct {
 	mu          sync.Mutex
 	now         time.Time // server clock
 	bindings    []Binding
-	onReport    func([]Account) []Binding
+	onReport    func(Report) []Binding
 	failStatus  int // non-zero: every request gets this status
 	retryAfter  string
 	rawResponse []byte // non-nil: served as the 200 body instead of the signed document
@@ -208,15 +202,13 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		f.posts++
 		body, _ := io.ReadAll(r.Body)
 		f.postBody = body
-		var req struct {
-			Accounts []Account `json:"accounts"`
-		}
+		var req Report
 		if json.Unmarshal(body, &req) != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if f.onReport != nil {
-			f.bindings = f.onReport(req.Accounts)
+			f.bindings = f.onReport(req)
 		}
 		payload, _ := f.doc()
 		f.write200(w, payload)

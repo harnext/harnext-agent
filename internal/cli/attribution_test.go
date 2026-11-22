@@ -37,28 +37,32 @@ func noClearIdentity(t *testing.T, out string) {
 }
 
 func heldBackSummary() service.GateSummary {
+	exp := time.Date(2026, 11, 22, 9, 30, 0, 0, time.UTC)
 	return service.GateSummary{
-		Identity: service.IdentityStatus{State: service.IdentityOK, Bindings: 2, ExpiresAt: time.Date(2026, 11, 22, 9, 30, 0, 0, time.UTC)},
 		Accounts: service.AccountsStatus{
-			Sendable: 14,
-			Skipped:  map[string]int{"account_unbound": 3, "no_account": 1, "git_email_missing": 2, "identity_pending": 0},
-			Pending: []service.PendingAccount{
-				{Tool: "claude_code", Label: "w***@example.test", Sessions: 3},
-				{Tool: "vscode_copilot", Label: "d***@example.test", Sessions: 1},
-				{Tool: "claude_code", Label: "leak@example.test", Sessions: 9}, // an unmasked label must never be shown
+			Harnext: []service.HarnextAccountStatus{
+				{ID: "a1b2c3d4e5", Identity: service.IdentityStatus{State: service.IdentityOK, Bindings: 2, ExpiresAt: exp},
+					ClaudeMatched: true, ClaudeLabel: "w***@example.test", CopilotSelected: true},
+				{ID: "f6a7b8c9d0", Identity: service.IdentityStatus{State: service.IdentityOK, Bindings: 1, ExpiresAt: exp},
+					LastReportError: "transient"},
+				// An unmasked label must never be shown.
+				{ID: "0011223344", Identity: service.IdentityStatus{State: service.IdentityOK, ExpiresAt: exp}, ClaudeMatched: true, ClaudeLabel: "leak@example.test"},
 			},
-			PendingTotal: 5,
+			ClaudeFound:   3,
+			CopilotLogins: 2,
+			Sendable:      14,
+			Skipped:       map[string]int{"no_matching_account": 3, "no_account": 1, "copilot_account_unknown": 2, "identity_pending": 0},
 		},
 	}
 }
 
-func TestStatusShowsIdentityReasonsAndPendingLabels(t *testing.T) {
+func TestStatusShowsAccountsReasonsAndHints(t *testing.T) {
 	p := newPaths(t)
 	exec(t, p, tok+"\n", "init", "--token-stdin", "--server", "https://app.example.com")
 	sum := heldBackSummary()
 	now := time.Now().UTC()
 	if err := p.WriteStatus(service.StatusFile{
-		UpdatedAt: now, Identity: sum.Identity, Accounts: sum.Accounts,
+		UpdatedAt: now, Accounts: sum.Accounts,
 		Upload: service.UploadStatus{LastAttempt: now, Accepted: 14, Skipped: 6, Held: 1},
 	}); err != nil {
 		t.Fatal(err)
@@ -68,10 +72,15 @@ func TestStatusShowsIdentityReasonsAndPendingLabels(t *testing.T) {
 		t.Fatal(r.failure)
 	}
 	for _, want := range []string{
-		"Identity:  ok (2 accounts connected, valid until ",
-		"Accounts:  14 sessions ready to send; kept on this machine: no_account 1, git_email_missing 2, account_unbound 3\n",
-		"Pending:   w***@example.test (claude_code, 3 sessions); d***@example.test (vscode_copilot, 1 session) and 3 more\n",
-		"           Connect them in the Harnext panel under Connected Agents.\n",
+		"Accounts:  3 Harnext accounts on this machine\n",
+		"  a1b2c3d4e5  identity ok (2 accounts connected, valid until ",
+		"            Claude Code: w***@example.test\n",
+		"            Copilot:     GitHub account selected\n",
+		"            Claude Code: no signed-in account matches this Harnext account\n",
+		"            Copilot:     no GitHub account selected\n",
+		"            Report:      the last account report failed (transient)\n",
+		"Found:     3 Claude Code accounts signed in, 2 GitHub accounts found for Copilot\n",
+		"Sessions:  14 sessions ready to send; kept on this machine: no_account 1, copilot_account_unknown 2, no_matching_account 3\n",
 		"6 kept on this machine; 1 refused by the server (account not connected)",
 	} {
 		if !strings.Contains(r.out, want) {
@@ -84,30 +93,31 @@ func TestStatusShowsIdentityReasonsAndPendingLabels(t *testing.T) {
 	noClearIdentity(t, r.out)
 }
 
-func TestStatusIdentityStates(t *testing.T) {
+// An unmatched Claude Code account is only counted, with a hint how to collect it; a selected GitHub account silences the Copilot hint.
+func TestStatusHintsForUnmatchedAccounts(t *testing.T) {
 	p := newPaths(t)
 	exec(t, p, tok+"\n", "init", "--token-stdin", "--server", "https://app.example.com")
-	for state, want := range map[string]string{
-		service.IdentityPending:       "Identity:  pending (no verified identity yet; sessions stay on this machine); last error: transient\n",
-		service.IdentityExpired:       "Identity:  expired (sessions stay on this machine until it is renewed)\n",
-		service.IdentityNoTrustedKeys: "Identity:  no trusted keys (this build cannot verify identities; sessions stay on this machine)\n",
-	} {
-		id := service.IdentityStatus{State: state}
-		if state == service.IdentityPending {
-			id.LastError = "transient"
-		}
-		if err := p.WriteStatus(service.StatusFile{UpdatedAt: time.Now(), Identity: id}); err != nil {
+	ok := service.IdentityStatus{State: service.IdentityOK, ExpiresAt: time.Now().Add(time.Hour)}
+	write := func(a service.AccountsStatus) string {
+		if err := p.WriteStatus(service.StatusFile{UpdatedAt: time.Now(), Accounts: a}); err != nil {
 			t.Fatal(err)
 		}
-		r := exec(t, p, "", "status")
-		if !strings.Contains(r.out, want) || !strings.Contains(r.out, "Accounts:  0 sessions ready to send\n") || strings.Contains(r.out, "Connect them") {
-			t.Fatalf("state %s:\n%s", state, r.out)
+		return exec(t, p, "", "status").out
+	}
+	out := write(service.AccountsStatus{Harnext: []service.HarnextAccountStatus{{ID: "a1b2c3d4e5", Identity: ok}}, ClaudeFound: 1, CopilotLogins: 1})
+	for _, want := range []string{"Hint:      Claude Code is signed in with an address that is not the e-mail of a Harnext account", "Hint:      choose your GitHub account for Copilot in the Harnext panel under Agents."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("no hint %q:\n%s", want, out)
 		}
 	}
-	// A status file from a run with a test gate has no identity block.
+	out = write(service.AccountsStatus{Harnext: []service.HarnextAccountStatus{{ID: "a1b2c3d4e5", Identity: ok, ClaudeMatched: true, CopilotSelected: true}}, ClaudeFound: 1, CopilotLogins: 1})
+	if strings.Contains(out, "Hint:") {
+		t.Fatalf("hint although everything matches:\n%s", out)
+	}
+	// A status file from a run with a test gate has no accounts block.
 	_ = p.WriteStatus(service.StatusFile{UpdatedAt: time.Now()})
-	if r := exec(t, p, "", "status"); strings.Contains(r.out, "Identity:") {
-		t.Fatalf("identity line without identity data:\n%s", r.out)
+	if r := exec(t, p, "", "status"); strings.Contains(r.out, "Accounts:") {
+		t.Fatalf("accounts line without account data:\n%s", r.out)
 	}
 }
 
@@ -135,12 +145,12 @@ func TestPreviewAndStatsPrintTheGateSummary(t *testing.T) {
 	if r.failure != nil {
 		t.Fatal(r.failure)
 	}
-	for _, want := range []string{"Showing 1 of 2 sessions", "Identity:  ok", "Pending:   w***@example.test", "Connected Agents"} {
+	for _, want := range []string{"Showing 1 of 2 sessions", "Accounts:  3 Harnext accounts", "Claude Code: w***@example.test", "Found:     3 Claude Code accounts"} {
 		if !strings.Contains(r.err, want) {
 			t.Fatalf("preview stderr lacks %q:\n%s", want, r.err)
 		}
 	}
-	if strings.Contains(r.out, "Identity:") {
+	if strings.Contains(r.out, "Accounts:") {
 		t.Fatalf("the summary must not mix into the JSON on stdout:\n%s", r.out)
 	}
 	noClearIdentity(t, r.err)
@@ -149,7 +159,7 @@ func TestPreviewAndStatsPrintTheGateSummary(t *testing.T) {
 	if r.failure != nil {
 		t.Fatal(r.failure)
 	}
-	if !strings.Contains(r.out, "TOTAL") || !strings.Contains(r.out, "Identity:  ok") || !strings.Contains(r.out, "Connected Agents") {
+	if !strings.Contains(r.out, "TOTAL") || !strings.Contains(r.out, "Accounts:  3 Harnext accounts") || !strings.Contains(r.out, "Found:     3 Claude Code accounts") {
 		t.Fatalf("stats:\n%s", r.out)
 	}
 	noClearIdentity(t, r.out)

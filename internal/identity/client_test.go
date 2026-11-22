@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
-func goodAccount() Account {
-	return Account{Tool: ToolClaudeCode, Hash: hashA, Label: "c***@gmail.com", Sessions30d: 12}
+func goodReport() Report {
+	return Report{
+		Claude:  ClaudeReport{Found: 2, Matched: true, Label: "c***@gmail.com"},
+		Copilot: CopilotReport{Logins: []CopilotLogin{{Login: "octocat", IDHash: hashB, Plan: "pro"}}},
+	}
 }
 
 func TestNewClientValidation(t *testing.T) {
@@ -138,7 +141,7 @@ func TestNoRedirectAndNoLeak(t *testing.T) {
 	if _, err := c.Fetch(context.Background(), ""); CodeOf(err) != CodeUnexpectedStatus {
 		t.Errorf("redirect: %v", err)
 	}
-	if _, err := c.Report(context.Background(), []Account{goodAccount()}); CodeOf(err) != CodeUnexpectedStatus {
+	if _, err := c.Report(context.Background(), goodReport()); CodeOf(err) != CodeUnexpectedStatus {
 		t.Errorf("redirect on report: %v", err)
 	}
 	if hits.Load() != 0 {
@@ -169,7 +172,7 @@ func TestEmptyTokenSendsNothing(t *testing.T) {
 	if _, err := c.Fetch(context.Background(), ""); CodeOf(err) != CodeNoToken {
 		t.Errorf("fetch: %v", err)
 	}
-	if _, err := c.Report(context.Background(), nil); CodeOf(err) != CodeNoToken {
+	if _, err := c.Report(context.Background(), Report{}); CodeOf(err) != CodeNoToken {
 		t.Errorf("report: %v", err)
 	}
 	if len(f.view().auth) != 0 {
@@ -180,45 +183,36 @@ func TestEmptyTokenSendsNothing(t *testing.T) {
 func TestReportSendsContractBody(t *testing.T) {
 	s := newSigner(t, "k1")
 	f := newFakeServer(t, s, t0.Add(time.Minute))
+	var got Report
 	f.set(func(f *fakeServer) {
-		f.onReport = func(acc []Account) []Binding {
-			return []Binding{{acc[0].Tool, acc[0].Hash, routeA}}
+		f.onReport = func(rep Report) []Binding {
+			got = rep
+			return []Binding{{ToolClaudeCode, hashA}}
 		}
 	})
 	c := f.client(t)
-	res, err := c.Report(context.Background(), []Account{goodAccount(), {ToolVSCodeCopilot, hashB, "a<b>&c", 0}})
+	res, err := c.Report(context.Background(), goodReport())
 	if err != nil {
 		t.Fatal(err)
 	}
 	doc, err := VerifyEnvelope(res.Envelope, s.keys(), t0.Add(time.Hour), time.Time{})
-	if err != nil || len(doc.Bindings) != 1 || doc.Bindings[0].RouteID != routeA {
+	if err != nil || len(doc.Bindings) != 1 || doc.Bindings[0].Hash != hashA {
 		t.Fatalf("doc = %+v err = %v", doc, err)
+	}
+	if got.Claude != goodReport().Claude || len(got.Copilot.Logins) != 1 || got.Copilot.Logins[0].Login != "octocat" {
+		t.Fatalf("server saw %+v", got)
 	}
 	v := f.view()
 	var body map[string]any
-	if err := json.Unmarshal(v.postBody, &body); err != nil || len(body) != 1 {
+	if err := json.Unmarshal(v.postBody, &body); err != nil || len(body) != 2 {
 		t.Fatalf("body = %s", v.postBody)
 	}
-	first := body["accounts"].([]any)[0].(map[string]any)
-	if len(first) != 4 || first["tool"] != ToolClaudeCode || first["hash"] != hashA || first["label"] != "c***@gmail.com" || first["sessions_30d"] != float64(12) {
-		t.Errorf("account = %v", first)
-	}
-	if strings.Contains(string(v.postBody), `\u003c`) {
-		t.Error("HTML escaping changed the label bytes")
-	}
-	if v.auth[0] != "Bearer "+testToken {
-		t.Error("report is not authenticated")
-	}
-}
-
-func TestReportEmptyIsAnArray(t *testing.T) {
-	s := newSigner(t, "k1")
-	f := newFakeServer(t, s, t0)
-	if _, err := f.client(t).Report(context.Background(), nil); err != nil {
+	// A report without Copilot accounts sends an empty list, not null.
+	if _, err := c.Report(context.Background(), Report{Claude: ClaudeReport{Found: 0}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(f.view().postBody); got != `{"accounts":[]}` {
-		t.Errorf("body = %s", got)
+	if !strings.Contains(string(f.view().postBody), `"logins":[]`) {
+		t.Errorf("body = %s", f.view().postBody)
 	}
 }
 
@@ -227,57 +221,68 @@ func TestReportRules(t *testing.T) {
 	f := newFakeServer(t, s, t0)
 	c := f.client(t)
 
-	mk := func(fn func(a *Account)) []Account {
-		a := goodAccount()
-		fn(&a)
-		return []Account{a}
+	mk := func(fn func(r *Report)) Report {
+		r := goodReport()
+		fn(&r)
+		return r
 	}
-	twenty := make([]Account, 20)
-	for i := range twenty {
-		twenty[i] = goodAccount()
+	logins := func(n int) []CopilotLogin {
+		out := make([]CopilotLogin, n)
+		for i := range out {
+			out[i] = CopilotLogin{Login: strings.Repeat("a", 64), IDHash: hashB, Plan: "enterprise"}
+		}
+		return out
 	}
-	ok := map[string][]Account{
-		"twenty accounts": twenty,
-		"label 80 chars":  mk(func(a *Account) { a.Label = strings.Repeat("a", 80) }),
-		"label 1 char":    mk(func(a *Account) { a.Label = "x" }),
-		"masked label":    mk(func(a *Account) { a.Label = "j***@corp.example" }),
-		"star only":       mk(func(a *Account) { a.Label = "***" }),
-		"no at sign":      mk(func(a *Account) { a.Label = "work account" }),
-		"sessions zero":   mk(func(a *Account) { a.Sessions30d = 0 }),
-		"sessions max":    mk(func(a *Account) { a.Sessions30d = 1_000_000 }),
-		"label non ascii": mk(func(a *Account) { a.Label = "ç***@örnek.com" }),
-		"copilot tool":    mk(func(a *Account) { a.Tool = ToolVSCodeCopilot }),
+	ok := map[string]Report{
+		"baseline":           goodReport(),
+		"nothing found":      {},
+		"found unmatched":    {Claude: ClaudeReport{Found: 3}},
+		"label 80 chars":     mk(func(r *Report) { r.Claude.Label = strings.Repeat("a", 80) }),
+		"label 1 char":       mk(func(r *Report) { r.Claude.Label = "x" }),
+		"masked label":       mk(func(r *Report) { r.Claude.Label = "j***@corp.example" }),
+		"label non ascii":    mk(func(r *Report) { r.Claude.Label = "ç***@örnek.com" }),
+		"20 claude accounts": mk(func(r *Report) { r.Claude.Found = 20 }),
+		"login without id":   mk(func(r *Report) { r.Copilot.Logins = []CopilotLogin{{Login: "never-active"}} }),
+		"twenty logins":      mk(func(r *Report) { r.Copilot.Logins = logins(20) }),
+		"underscore login":   mk(func(r *Report) { r.Copilot.Logins = []CopilotLogin{{Login: "a_b-C9"}} }),
+		"all plans": mk(func(r *Report) {
+			r.Copilot.Logins = []CopilotLogin{{Login: "a", Plan: "free"}, {Login: "b", Plan: "business"}}
+		}),
 	}
-	for name, acc := range ok {
-		if err := ValidateAccounts(acc); err != nil {
-			t.Errorf("accept %q: %v", name, err)
+	for name, rep := range ok {
+		if err := ValidateReport(rep); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
-	reject := map[string][]Account{
-		"twenty one":        append(append([]Account(nil), twenty...), goodAccount()),
-		"label empty":       mk(func(a *Account) { a.Label = "" }),
-		"label 81 chars":    mk(func(a *Account) { a.Label = strings.Repeat("a", 81) }),
-		"plain email":       mk(func(a *Account) { a.Label = "jane@gmail.com" }),
-		"at sign only":      mk(func(a *Account) { a.Label = "@" }),
-		"email with space":  mk(func(a *Account) { a.Label = "work jane@corp.example" }),
-		"newline":           mk(func(a *Account) { a.Label = "a\nb" }),
-		"tab":               mk(func(a *Account) { a.Label = "a\tb" }),
-		"nul":               mk(func(a *Account) { a.Label = "a\x00b" }),
-		"line separator":    mk(func(a *Account) { a.Label = "a\u2028b" }),
-		"zero width space":  mk(func(a *Account) { a.Label = "a\u200bb" }),
-		"invalid utf8":      mk(func(a *Account) { a.Label = "a\xffb" }),
-		"41 astral runes":   mk(func(a *Account) { a.Label = strings.Repeat("\U0001F600", 41) }),
-		"unknown tool":      mk(func(a *Account) { a.Tool = "cursor" }),
-		"hash uppercase":    mk(func(a *Account) { a.Hash = strings.ToUpper(a.Hash) }),
-		"hash short":        mk(func(a *Account) { a.Hash = a.Hash[:10] }),
-		"sessions negative": mk(func(a *Account) { a.Sessions30d = -1 }),
-		"sessions too many": mk(func(a *Account) { a.Sessions30d = 1_000_001 }),
+	reject := map[string]Report{
+		"found negative":      mk(func(r *Report) { r.Claude.Found = -1 }),
+		"found 21":            mk(func(r *Report) { r.Claude.Found = 21 }),
+		"matched without any": mk(func(r *Report) { r.Claude.Found = 0 }),
+		"matched no label":    mk(func(r *Report) { r.Claude.Label = "" }),
+		"label unmatched":     mk(func(r *Report) { r.Claude.Matched = false }),
+		"label 81 chars":      mk(func(r *Report) { r.Claude.Label = strings.Repeat("a", 81) }),
+		"plain email":         mk(func(r *Report) { r.Claude.Label = "jane@gmail.com" }),
+		"at sign only":        mk(func(r *Report) { r.Claude.Label = "@" }),
+		"newline":             mk(func(r *Report) { r.Claude.Label = "a\nb" }),
+		"nul":                 mk(func(r *Report) { r.Claude.Label = "a\x00b" }),
+		"line separator":      mk(func(r *Report) { r.Claude.Label = "a\u2028b" }),
+		"zero width space":    mk(func(r *Report) { r.Claude.Label = "a\u200bb" }),
+		"invalid utf8":        mk(func(r *Report) { r.Claude.Label = "a\xffb" }),
+		"41 astral runes":     mk(func(r *Report) { r.Claude.Label = strings.Repeat("\U0001F600", 41) }),
+		"21 logins":           mk(func(r *Report) { r.Copilot.Logins = logins(21) }),
+		"login empty":         mk(func(r *Report) { r.Copilot.Logins = []CopilotLogin{{Login: ""}} }),
+		"login with space":    mk(func(r *Report) { r.Copilot.Logins = []CopilotLogin{{Login: "a b"}} }),
+		"login is an email":   mk(func(r *Report) { r.Copilot.Logins = []CopilotLogin{{Login: "a@b.co"}} }),
+		"login too long":      mk(func(r *Report) { r.Copilot.Logins = []CopilotLogin{{Login: strings.Repeat("a", 65)}} }),
+		"id hash uppercase":   mk(func(r *Report) { r.Copilot.Logins[0].IDHash = strings.ToUpper(hashB) }),
+		"id hash short":       mk(func(r *Report) { r.Copilot.Logins[0].IDHash = hashB[:10] }),
+		"unknown plan":        mk(func(r *Report) { r.Copilot.Logins[0].Plan = "team" }),
 	}
-	for name, acc := range reject {
-		if CodeOf(ValidateAccounts(acc)) != CodeInvalidReport {
-			t.Errorf("reject %q: not rejected", name)
+	for name, rep := range reject {
+		if CodeOf(ValidateReport(rep)) != CodeInvalidReport {
+			t.Errorf("%s: accepted", name)
 		}
-		if _, err := c.Report(context.Background(), acc); CodeOf(err) != CodeInvalidReport {
+		if _, err := c.Report(context.Background(), rep); CodeOf(err) != CodeInvalidReport {
 			t.Errorf("report %q: code = %q", name, CodeOf(err))
 		}
 	}
@@ -285,19 +290,19 @@ func TestReportRules(t *testing.T) {
 		t.Errorf("%d invalid reports reached the server", n)
 	}
 	// 40 astral runes (80 UTF-16 units) is still allowed.
-	if err := ValidateAccounts(mk(func(a *Account) { a.Label = strings.Repeat("\U0001F600", 40) })); err != nil {
+	if err := ValidateReport(mk(func(r *Report) { r.Claude.Label = strings.Repeat("\U0001F600", 40) })); err != nil {
 		t.Errorf("80 UTF-16 units: %v", err)
 	}
 	// Error text names no value.
-	err := ValidateAccounts(mk(func(a *Account) { a.Label = "jane@gmail.com" }))
+	err := ValidateReport(mk(func(r *Report) { r.Claude.Label = "jane@gmail.com" }))
 	if strings.Contains(err.Error(), "jane") {
 		t.Error("error carries the label")
 	}
 	// The largest valid report stays below the server's body limit.
-	big := make([]Account, 20)
-	for i := range big {
-		big[i] = Account{ToolVSCodeCopilot, hashB, strings.Repeat("\u20ac", 80), 1_000_000}
-	}
+	big := mk(func(r *Report) {
+		r.Claude.Label = strings.Repeat("\u20ac", 80)
+		r.Copilot.Logins = logins(20)
+	})
 	if _, err := c.Report(context.Background(), big); err != nil {
 		t.Errorf("largest report: %v", err)
 	}
@@ -312,7 +317,7 @@ func TestReportServerErrors(t *testing.T) {
 	c := f.client(t)
 	for status, want := range map[int]Code{400: CodeRejected, 413: CodeRejected, 401: CodeUnauthorized, 429: CodeTransient, 503: CodeTransient, 304: CodeUnexpectedStatus} {
 		f.set(func(f *fakeServer) { f.failStatus = status })
-		if _, err := c.Report(context.Background(), []Account{goodAccount()}); CodeOf(err) != want {
+		if _, err := c.Report(context.Background(), goodReport()); CodeOf(err) != want {
 			t.Errorf("status %d: code = %q, want %q", status, CodeOf(err), want)
 		}
 	}

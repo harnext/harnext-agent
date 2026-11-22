@@ -133,16 +133,16 @@ func TestPayloadRules(t *testing.T) {
 	s := newSigner(t, "k1")
 	now := t0.Add(30 * time.Minute)
 	good := func() map[string]any {
-		return map[string]any{"payload_version": 1, "identity_version": 5, "issued_at": ts(t0), "expires_at": ts(t0.Add(24 * time.Hour)),
-			"bindings": []any{map[string]any{"tool": ToolClaudeCode, "hash": hashA, "route_id": routeA}}}
+		return map[string]any{"payload_version": 2, "identity_version": 5, "issued_at": ts(t0), "expires_at": ts(t0.Add(24 * time.Hour)),
+			"bindings": []any{map[string]any{"tool": ToolClaudeCode, "hash": hashA}}}
 	}
-	binding := func(tool, hash, route string) map[string]any {
-		return map[string]any{"tool": tool, "hash": hash, "route_id": route}
+	binding := func(tool, hash string) map[string]any {
+		return map[string]any{"tool": tool, "hash": hash}
 	}
 	many := func(n int) []any {
 		out := make([]any, 0, n)
 		for i := 0; i < n; i++ {
-			out = append(out, binding(ToolClaudeCode, fmt.Sprintf("%064x", i), routeA))
+			out = append(out, binding(ToolClaudeCode, fmt.Sprintf("%064x", i)))
 		}
 		return out
 	}
@@ -156,22 +156,16 @@ func TestPayloadRules(t *testing.T) {
 		"baseline":              good(),
 		"unknown field ignored": mutate(func(m map[string]any) { m["extra"] = true }),
 		"unknown binding field": mutate(func(m map[string]any) {
-			m["bindings"] = []any{map[string]any{"tool": ToolClaudeCode, "hash": hashA, "route_id": routeA, "x": 1}}
+			m["bindings"] = []any{map[string]any{"tool": ToolClaudeCode, "hash": hashA, "x": 1}}
 		}),
 		"ttl exactly 24h":       mutate(func(m map[string]any) { m["expires_at"] = ts(t0.Add(24 * time.Hour)) }),
 		"no fractional seconds": mutate(func(m map[string]any) { m["issued_at"] = "2026-11-21T12:00:00Z" }),
-		"256 bindings":          mutate(func(m map[string]any) { m["bindings"] = many(256) }),
-		"nil route id": mutate(func(m map[string]any) {
-			m["bindings"] = []any{binding(ToolClaudeCode, hashA, "00000000-0000-0000-0000-000000000000")}
-		}),
+		"two bindings":          mutate(func(m map[string]any) { m["bindings"] = many(MaxBindings) }),
 		"same hash other tool": mutate(func(m map[string]any) {
-			m["bindings"] = []any{binding(ToolClaudeCode, hashA, routeA), binding(ToolVSCodeCopilot, hashA, routeB)}
+			m["bindings"] = []any{binding(ToolClaudeCode, hashA), binding(ToolVSCodeCopilot, hashA)}
 		}),
 		"identity_version max":  mutate(func(m map[string]any) { m["identity_version"] = int64(1<<48 - 1) }),
 		"identity_version zero": mutate(func(m map[string]any) { m["identity_version"] = 0 }),
-		"uppercase uuid": mutate(func(m map[string]any) {
-			m["bindings"] = []any{binding(ToolClaudeCode, hashA, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")}
-		}),
 		"leap day": mutate(func(m map[string]any) {
 			m["issued_at"] = "2028-02-29T00:00:00.000Z"
 			m["expires_at"] = "2028-03-01T00:00:00.000Z"
@@ -189,8 +183,8 @@ func TestPayloadRules(t *testing.T) {
 	}
 
 	reject := map[string]map[string]any{
-		"payload_version 2":       mutate(func(m map[string]any) { m["payload_version"] = 2 }),
-		"payload_version string":  mutate(func(m map[string]any) { m["payload_version"] = "1" }),
+		"payload_version 1":       mutate(func(m map[string]any) { m["payload_version"] = 1 }),
+		"payload_version string":  mutate(func(m map[string]any) { m["payload_version"] = "2" }),
 		"payload_version null":    mutate(func(m map[string]any) { m["payload_version"] = nil }),
 		"payload_version absent":  mutate(func(m map[string]any) { delete(m, "payload_version") }),
 		"identity_version neg":    mutate(func(m map[string]any) { m["identity_version"] = -1 }),
@@ -216,23 +210,17 @@ func TestPayloadRules(t *testing.T) {
 		"bindings absent": mutate(func(m map[string]any) { delete(m, "bindings") }),
 		"bindings null":   mutate(func(m map[string]any) { m["bindings"] = nil }),
 		"bindings object": mutate(func(m map[string]any) { m["bindings"] = map[string]any{} }),
-		"257 bindings":    mutate(func(m map[string]any) { m["bindings"] = many(257) }),
+		"3 bindings":      mutate(func(m map[string]any) { m["bindings"] = many(MaxBindings + 1) }),
 		"null binding":    mutate(func(m map[string]any) { m["bindings"] = []any{nil} }),
-		"unknown tool":    mutate(func(m map[string]any) { m["bindings"] = []any{binding("cursor", hashA, routeA)} }),
-		"empty tool":      mutate(func(m map[string]any) { m["bindings"] = []any{binding("", hashA, routeA)} }),
-		"hash uppercase":  mutate(func(m map[string]any) { m["bindings"] = []any{binding(ToolClaudeCode, strings.ToUpper(hashA), routeA)} }),
-		"hash short":      mutate(func(m map[string]any) { m["bindings"] = []any{binding(ToolClaudeCode, hashA[:63], routeA)} }),
+		"unknown tool":    mutate(func(m map[string]any) { m["bindings"] = []any{binding("cursor", hashA)} }),
+		"empty tool":      mutate(func(m map[string]any) { m["bindings"] = []any{binding("", hashA)} }),
+		"hash uppercase":  mutate(func(m map[string]any) { m["bindings"] = []any{binding(ToolClaudeCode, strings.ToUpper(hashA))} }),
+		"hash short":      mutate(func(m map[string]any) { m["bindings"] = []any{binding(ToolClaudeCode, hashA[:63])} }),
 		"hash non hex": mutate(func(m map[string]any) {
-			m["bindings"] = []any{binding(ToolClaudeCode, strings.Repeat("g", 64), routeA)}
+			m["bindings"] = []any{binding(ToolClaudeCode, strings.Repeat("g", 64))}
 		}),
-		"route empty":    mutate(func(m map[string]any) { m["bindings"] = []any{binding(ToolClaudeCode, hashA, "")} }),
-		"route not uuid": mutate(func(m map[string]any) { m["bindings"] = []any{binding(ToolClaudeCode, hashA, "route-1")} }),
-		"route bad variant": mutate(func(m map[string]any) {
-			m["bindings"] = []any{binding(ToolClaudeCode, hashA, "11111111-1111-4111-c111-111111111111")}
-		}),
-		"route absent": mutate(func(m map[string]any) { m["bindings"] = []any{map[string]any{"tool": ToolClaudeCode, "hash": hashA}} }),
 		"duplicate tool+hash": mutate(func(m map[string]any) {
-			m["bindings"] = []any{binding(ToolClaudeCode, hashA, routeA), binding(ToolClaudeCode, hashA, routeB)}
+			m["bindings"] = []any{binding(ToolClaudeCode, hashA), binding(ToolClaudeCode, hashA)}
 		}),
 	}
 	for name, doc := range reject {
@@ -300,7 +288,7 @@ func TestSignatureAndKeys(t *testing.T) {
 		t.Errorf("no keys: %v", err)
 	}
 	tampered := env
-	tampered.Payload = base64.RawURLEncoding.EncodeToString([]byte(`{"payload_version":1}`))
+	tampered.Payload = base64.RawURLEncoding.EncodeToString([]byte(`{"payload_version":2}`))
 	if _, err := VerifyEnvelope(tampered, a.keys(), now, time.Time{}); CodeOf(err) != CodeBadSignature {
 		t.Errorf("tampered payload: %v", err)
 	}
@@ -308,7 +296,7 @@ func TestSignatureAndKeys(t *testing.T) {
 
 func TestErrorsCarryNoContent(t *testing.T) {
 	s := newSigner(t, "k1")
-	p, _ := json.Marshal(map[string]any{"payload_version": 1, "secret_marker": "SECRET-DOC-CONTENT"})
+	p, _ := json.Marshal(map[string]any{"payload_version": 2, "secret_marker": "SECRET-DOC-CONTENT"})
 	_, err := VerifyEnvelope(s.sign(p), s.keys(), t0, time.Time{})
 	if err == nil || err.Error() != "identity: invalid_payload" {
 		t.Fatalf("err = %v", err)

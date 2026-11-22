@@ -15,6 +15,7 @@ import (
 	"github.com/harnext/harnext-agent/internal/account"
 	"github.com/harnext/harnext-agent/internal/aggregate"
 	"github.com/harnext/harnext-agent/internal/analyzer"
+	"github.com/harnext/harnext-agent/internal/copilotid"
 	"github.com/harnext/harnext-agent/internal/identity"
 	"github.com/harnext/harnext-agent/internal/parser/claudecode"
 	"github.com/harnext/harnext-agent/internal/parser/copilot"
@@ -59,6 +60,8 @@ type RunOptions struct {
 	// Gate decides per session whether it is sent and to which account route. Nil builds the production gate: the attribution
 	// gate over the signed identity document (fail closed without a valid one). Tests inject their own.
 	Gate func(aggregate.Row) uploader.Decision
+	// CopilotStateDirs overrides the VS Code globalStorage directories the GitHub account of Copilot is read from; for tests.
+	CopilotStateDirs []string
 	// IdentityPeriod spaces the identity document refreshes (zero: identity.DefaultPeriod). The account check, report and
 	// re-report periods default to 30 s, 30 min and 2 min; tests shorten them.
 	IdentityPeriod     time.Duration
@@ -126,9 +129,20 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	token, err := o.Paths.LoadToken()
+	accounts, err := o.Paths.LoadAccounts()
 	if err != nil {
 		return false, err
+	}
+	// The signed configuration is the same for every account: it is fetched with the first account's token. Uploads use the
+	// token of the account a session was routed to (the gate's RouteID).
+	primaryToken := func() string { return accounts[0].Token }
+	tokenFor := func(route string) string {
+		for _, a := range accounts {
+			if a.ID == route {
+				return a.Token
+			}
+		}
+		return accounts[0].Token
 	}
 	if err := os.MkdirAll(o.Paths.Dir, 0o700); err != nil {
 		return false, errors.New("service: create directory")
@@ -170,7 +184,7 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 		}
 	}
 	client, err := remoteconfig.NewClient(remoteconfig.ClientOptions{
-		BaseURL: settings.ServerURL, Token: func() string { return token }, AgentVersion: o.Version,
+		BaseURL: settings.ServerURL, Token: primaryToken, AgentVersion: o.Version,
 		AllowInsecureLocalhost: settings.AllowInsecureLocalhost, HTTPClient: o.HTTPClient,
 	})
 	if err != nil {
@@ -198,27 +212,40 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 	var ag *accountGate
 	var upRef atomic.Pointer[uploader.Uploader]
 	if gate == nil {
-		idc, err := identity.NewClient(identity.ClientOptions{
-			BaseURL: settings.ServerURL, Token: func() string { return token }, AgentVersion: o.Version,
-			AllowInsecureLocalhost: settings.AllowInsecureLocalhost, HTTPClient: o.HTTPClient,
-		})
+		rts := make([]*acctRuntime, 0, len(accounts))
+		for _, acct := range accounts {
+			acct := acct
+			idc, err := identity.NewClient(identity.ClientOptions{
+				BaseURL: settings.ServerURL, Token: func() string { return acct.Token }, AgentVersion: o.Version,
+				AllowInsecureLocalhost: settings.AllowInsecureLocalhost, HTTPClient: o.HTTPClient,
+			})
+			if err != nil {
+				return false, err
+			}
+			idm := identity.NewManager(identity.ManagerOptions{
+				Remote: idc, Keys: keys, Store: identity.NewStore(o.Paths.IdentityFileFor(acct.ID)), Period: o.IdentityPeriod, Clock: o.Clock,
+				// A connected account makes held sessions sendable: try them again at once.
+				OnChange: func() {
+					if u := upRef.Load(); u != nil {
+						u.Rewake()
+					}
+				},
+			})
+			rts = append(rts, &acctRuntime{acct: acct, idm: idm})
+		}
+		savedClaude, _, err := db.LoadState(accountsStateName)
 		if err != nil {
 			return false, err
 		}
-		idm := identity.NewManager(identity.ManagerOptions{
-			Remote: idc, Keys: keys, Store: identity.NewStore(o.Paths.IdentityFile), Period: o.IdentityPeriod, Clock: o.Clock,
-			// A connected account makes held sessions sendable: try them again at once.
-			OnChange: func() {
-				if u := upRef.Load(); u != nil {
-					u.Rewake()
-				}
-			},
-		})
-		saved, _, err := db.LoadState(accountsStateName)
+		savedCopilot, _, err := db.LoadState(copilotAcctState)
 		if err != nil {
 			return false, err
 		}
-		ag = newAccountGate(home, roots, saved, idm, len(keys) > 0, logf)
+		copDirs := o.CopilotStateDirs
+		if copDirs == nil {
+			copDirs = copilotid.DefaultDirs()
+		}
+		ag = newAccountGate(home, roots, savedClaude, savedCopilot, rts, &copilotid.Reader{Dirs: copDirs}, len(keys) > 0, logf)
 		ag.gate.ObserveAccounts() // before the first upload cycle
 		gate = ag.Decide
 	}
@@ -255,7 +282,10 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 		if len(keys) == 0 {
 			logf("no trusted keys in this build: sessions are held back (identity_pending)")
 		} else {
-			run(func() { _ = ag.idm.Run(ctx) })
+			for _, rt := range ag.accts {
+				rt := rt
+				run(func() { _ = rt.idm.Run(ctx) })
+			}
 			run(func() {
 				ag.reportLoop(ctx, check, orDefault(o.AccountReportEvery, accountReportEvery), orDefault(o.AccountReportGap, accountReportGap), logf)
 			})
@@ -290,7 +320,7 @@ func runOnce(parent context.Context, o RunOptions) (rescan bool, err error) {
 
 	bf := newBackfill(nil, logf, o.FirstPacketSessions, o.FirstPacketWindow)
 	up, err := uploader.New(uploader.Options{
-		BaseURL: settings.ServerURL, Token: func() string { return token }, AgentVersion: clip(o.Version, 32),
+		BaseURL: settings.ServerURL, Token: tokenFor, AgentVersion: clip(o.Version, 32),
 		Ledger: db, AllowInsecureLocalhost: settings.AllowInsecureLocalhost, HTTPClient: o.HTTPClient,
 		BatchPause: o.BatchPause, OnBatch: bf.Batch, OnQueued: bf.Queued, Catchup: bf.Catchup, Backlog: func() int { return bf.Status().Remaining },
 		BacklogTotal: func() int { return bf.Status().Found }, Gate: gate,
@@ -753,7 +783,7 @@ func (s *statusKeeper) publish(agg *aggregate.Aggregator, cop *aggregate.Copilot
 	}
 	s.mu.Lock()
 	out := s.base
-	out.Identity, out.Accounts = gate.Identity, gate.Accounts
+	out.Accounts = gate.Accounts
 	out.Copilot = CopilotStatus{
 		Sessions: aggregate.CountSessions(copRows), UniqueSpans: cc.UniqueSpans, SkippedLines: cskipped,
 		BackgroundSpans: cc.Ignored["background_chat"], File: ferr == nil && fi.Mode().IsRegular(),

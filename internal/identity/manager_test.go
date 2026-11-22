@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	hashC  = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	routeC = "33333333-3333-4333-8333-333333333333"
+	hashC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
 type rig struct {
@@ -73,10 +72,10 @@ func TestFailClosedWithoutDocument(t *testing.T) {
 	if snap := r.m.Current(); snap.Valid() || snap.IdentityVersion() != 0 || !snap.IssuedAt().IsZero() {
 		t.Fatalf("fresh manager is not closed: %+v", snap)
 	}
-	if _, ok := r.m.Current().RouteFor(ToolClaudeCode, hashA); ok {
+	if r.m.Current().Bound(ToolClaudeCode, hashA) {
 		t.Fatal("route resolved without a document")
 	}
-	if _, ok := (Snapshot{}).RouteFor(ToolClaudeCode, hashA); ok || (Snapshot{}).Valid() {
+	if (Snapshot{}).Bound(ToolClaudeCode, hashA) || (Snapshot{}).Valid() {
 		t.Fatal("zero snapshot resolves")
 	}
 	r.f.set(func(f *fakeServer) { f.failStatus = 500 })
@@ -95,15 +94,24 @@ func TestRefreshAndLookup(t *testing.T) {
 	if !snap.Valid() {
 		t.Fatal("not valid")
 	}
-	if id, ok := snap.RouteFor(ToolClaudeCode, hashA); !ok || id != routeA {
-		t.Errorf("claude route = %q %v", id, ok)
+	if !snap.Bound(ToolClaudeCode, hashA) {
+		t.Error("claude account not bound")
 	}
-	if id, ok := snap.RouteFor(ToolVSCodeCopilot, hashB); !ok || id != routeB {
-		t.Errorf("copilot route = %q %v", id, ok)
+	if !snap.Bound(ToolVSCodeCopilot, hashB) {
+		t.Error("copilot account not bound")
+	}
+	if h, ok := snap.HashFor(ToolClaudeCode); !ok || h != hashA {
+		t.Errorf("HashFor(claude) = %q %v", h, ok)
+	}
+	if h, ok := snap.HashFor(ToolVSCodeCopilot); !ok || h != hashB {
+		t.Errorf("HashFor(copilot) = %q %v", h, ok)
+	}
+	if _, ok := snap.HashFor("cursor"); ok {
+		t.Error("HashFor resolved an unknown tool")
 	}
 	for _, c := range [][2]string{{ToolVSCodeCopilot, hashA}, {ToolClaudeCode, hashC}, {"", ""}, {ToolClaudeCode, strings.ToUpper(hashA)}} {
-		if id, ok := snap.RouteFor(c[0], c[1]); ok || id != "" {
-			t.Errorf("RouteFor%v = %q %v", c, id, ok)
+		if snap.Bound(c[0], c[1]) {
+			t.Errorf("Bound%v = true", c)
 		}
 	}
 	if snap.IdentityVersion() != fingerprint(defaultBindings()) || !snap.IssuedAt().Equal(t0) || !snap.ExpiresAt().Equal(t0.Add(24*time.Hour)) {
@@ -185,10 +193,10 @@ func TestExpiryFailsClosedAndRecovers(t *testing.T) {
 	if held.Valid() {
 		t.Error("held snapshot still valid at expiry")
 	}
-	if _, ok := held.RouteFor(ToolClaudeCode, hashA); ok {
+	if held.Bound(ToolClaudeCode, hashA) {
 		t.Error("held snapshot still resolves after expiry")
 	}
-	if _, ok := r.m.Current().RouteFor(ToolClaudeCode, hashA); ok || r.m.Current().Valid() || r.m.Status().Valid {
+	if r.m.Current().Bound(ToolClaudeCode, hashA) || r.m.Current().Valid() || r.m.Status().Valid {
 		t.Error("manager resolves after expiry")
 	}
 	if !r.m.Status().HasDocument {
@@ -217,13 +225,13 @@ func TestExpiryFailsClosedAndRecovers(t *testing.T) {
 func TestOnChangeOnBindingChange(t *testing.T) {
 	r := newRig(t)
 	r.mustRefresh()
-	r.f.set(func(f *fakeServer) { f.bindings = []Binding{{ToolClaudeCode, hashA, routeC}} })
+	r.f.set(func(f *fakeServer) { f.bindings = []Binding{{ToolClaudeCode, hashC}} })
 	r.advance(time.Minute)
 	r.mustRefresh()
-	if id, _ := r.m.Current().RouteFor(ToolClaudeCode, hashA); id != routeC {
-		t.Errorf("route = %q", id)
+	if !r.m.Current().Bound(ToolClaudeCode, hashC) || r.m.Current().Bound(ToolClaudeCode, hashA) {
+		t.Error("binding change not adopted")
 	}
-	if _, ok := r.m.Current().RouteFor(ToolVSCodeCopilot, hashB); ok {
+	if r.m.Current().Bound(ToolVSCodeCopilot, hashB) {
 		t.Error("removed binding still resolves")
 	}
 	if r.changes.Load() != 2 {
@@ -236,7 +244,7 @@ func TestOnChangeOnBindingChange(t *testing.T) {
 	if !r.m.Current().Valid() || r.changes.Load() != 3 {
 		t.Errorf("valid=%v changes=%d", r.m.Current().Valid(), r.changes.Load())
 	}
-	if _, ok := r.m.Current().RouteFor(ToolClaudeCode, hashA); ok {
+	if r.m.Current().Bound(ToolClaudeCode, hashA) {
 		t.Error("empty document resolves")
 	}
 }
@@ -271,13 +279,13 @@ func TestBadSignatureAndWrongKeyAreRejected(t *testing.T) {
 	// A good document, then a forged one: the good one stays.
 	r.f.set(func(f *fakeServer) { f.s = r.s })
 	r.mustRefresh()
-	r.f.set(func(f *fakeServer) { f.s = other; f.bindings = []Binding{{ToolClaudeCode, hashA, routeC}} })
+	r.f.set(func(f *fakeServer) { f.s = other; f.bindings = []Binding{{ToolClaudeCode, hashC}} })
 	r.advance(time.Minute)
 	if err := r.m.Refresh(context.Background()); CodeOf(err) != CodeBadSignature {
 		t.Fatalf("forged: %v", err)
 	}
-	if id, _ := r.m.Current().RouteFor(ToolClaudeCode, hashA); id != routeA {
-		t.Errorf("forged binding adopted: %q", id)
+	if !r.m.Current().Bound(ToolClaudeCode, hashA) || r.m.Current().Bound(ToolClaudeCode, hashC) {
+		t.Error("forged binding adopted")
 	}
 }
 
@@ -289,7 +297,7 @@ func TestGarbageResponseKeepsCurrentDocument(t *testing.T) {
 	if err := r.m.Refresh(context.Background()); CodeOf(err) != CodeMalformed {
 		t.Fatalf("err = %v", err)
 	}
-	if _, ok := r.m.Current().RouteFor(ToolClaudeCode, hashA); !ok {
+	if !r.m.Current().Bound(ToolClaudeCode, hashA) {
 		t.Error("document dropped")
 	}
 }
@@ -304,8 +312,8 @@ func TestCacheReload(t *testing.T) {
 	if !m2.Current().Valid() {
 		t.Fatal("cache not loaded")
 	}
-	if id, ok := m2.Current().RouteFor(ToolVSCodeCopilot, hashB); !ok || id != routeB {
-		t.Errorf("route = %q %v", id, ok)
+	if !m2.Current().Bound(ToolVSCodeCopilot, hashB) {
+		t.Error("copilot account not bound after reload")
 	}
 	if r.changes.Load() != 1 {
 		t.Errorf("construction fired OnChange: %d", r.changes.Load())
@@ -343,7 +351,7 @@ func TestCacheIsReverified(t *testing.T) {
 
 	// Edited cache: the payload of another signed document under this document's signature.
 	st, _ := NewStore(r.store).Load()
-	st.Envelope.Payload = r.s.envelopeAt(t0, []Binding{{ToolClaudeCode, hashC, routeC}}).Payload
+	st.Envelope.Payload = r.s.envelopeAt(t0, []Binding{{ToolClaudeCode, hashC}}).Payload
 	if err := NewStore(r.store).Save(st); err != nil {
 		t.Fatal(err)
 	}
@@ -397,16 +405,16 @@ func TestReportAdoptsResponse(t *testing.T) {
 	r := newRig(t)
 	r.mustRefresh()
 	r.f.set(func(f *fakeServer) {
-		f.onReport = func(acc []Account) []Binding {
-			return append(defaultBindings(), Binding{acc[0].Tool, acc[0].Hash, routeC})
+		f.onReport = func(rep Report) []Binding {
+			return []Binding{{ToolClaudeCode, hashC}, {ToolVSCodeCopilot, hashB}}
 		}
 	})
 	r.advance(time.Minute)
-	if err := r.m.Report(context.Background(), []Account{{ToolClaudeCode, hashC, "w***@corp.example", 4}}); err != nil {
+	if err := r.m.Report(context.Background(), Report{Claude: ClaudeReport{Found: 1, Matched: true, Label: "w***@corp.example"}}); err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := r.m.Current().RouteFor(ToolClaudeCode, hashC); !ok || id != routeC {
-		t.Errorf("route = %q %v", id, ok)
+	if !r.m.Current().Bound(ToolClaudeCode, hashC) {
+		t.Error("account from the report response not adopted")
 	}
 	if r.changes.Load() != 2 {
 		t.Errorf("OnChange = %d, want 2", r.changes.Load())
@@ -428,9 +436,9 @@ func TestReportAdoptsResponse(t *testing.T) {
 func TestReportFailuresChangeNothing(t *testing.T) {
 	r := newRig(t)
 	r.mustRefresh()
-	good := []Account{{ToolClaudeCode, hashA, "c***@gmail.com", 1}}
+	good := Report{Claude: ClaudeReport{Found: 1, Matched: true, Label: "c***@gmail.com"}}
 
-	if err := r.m.Report(context.Background(), []Account{{ToolClaudeCode, hashA, "c@gmail.com", 1}}); CodeOf(err) != CodeInvalidReport {
+	if err := r.m.Report(context.Background(), Report{Claude: ClaudeReport{Found: 1, Matched: true, Label: "c@gmail.com"}}); CodeOf(err) != CodeInvalidReport {
 		t.Errorf("plain e-mail: %v", err)
 	}
 	if v := r.f.view(); v.posts != 0 {
@@ -444,7 +452,7 @@ func TestReportFailuresChangeNothing(t *testing.T) {
 	if err := r.m.Report(context.Background(), good); CodeOf(err) != CodeBadSignature {
 		t.Errorf("forged response: %v", err)
 	}
-	if _, ok := r.m.Current().RouteFor(ToolClaudeCode, hashA); !ok || r.changes.Load() != 1 {
+	if !r.m.Current().Bound(ToolClaudeCode, hashA) || r.changes.Load() != 1 {
 		t.Error("state changed by a failed report")
 	}
 }
@@ -454,7 +462,7 @@ func TestNoTrustedKeysMakesNoRequest(t *testing.T) {
 	if err := r.m.Refresh(context.Background()); CodeOf(err) != CodeNoTrustedKeys {
 		t.Errorf("refresh: %v", err)
 	}
-	if err := r.m.Report(context.Background(), nil); CodeOf(err) != CodeNoTrustedKeys {
+	if err := r.m.Report(context.Background(), Report{}); CodeOf(err) != CodeNoTrustedKeys {
 		t.Errorf("report: %v", err)
 	}
 	if err := r.m.Run(context.Background()); CodeOf(err) != CodeNoTrustedKeys {
@@ -499,11 +507,11 @@ func TestRunRefreshesPeriodically(t *testing.T) {
 
 func TestRunDefaultsAndJitter(t *testing.T) {
 	r := newRig(t, func(o *ManagerOptions) { o.Rand = func() float64 { return 0.5 } })
-	if r.m.opts.Period != 5*time.Minute {
+	if r.m.opts.Period != 2*time.Minute {
 		t.Errorf("default period = %v", r.m.opts.Period)
 	}
 	runFor(r, 1, nil)
-	if got := r.clk.sleepLog()[0]; got != 5*time.Minute+15*time.Second {
+	if got := r.clk.sleepLog()[0]; got != 2*time.Minute+6*time.Second {
 		t.Errorf("sleep with jitter = %v", got)
 	}
 }
@@ -565,7 +573,7 @@ func TestConcurrentUse(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {
 				s := r.m.Current()
-				_, _ = s.RouteFor(ToolClaudeCode, hashA)
+				_ = s.Bound(ToolClaudeCode, hashA)
 				_ = r.m.Status()
 			}
 		}()

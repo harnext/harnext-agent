@@ -136,6 +136,7 @@ func toWireQuality(q analyzer.Quality, coverage, detector int) (wireQuality, boo
 // prepared is a valid session with its ledger key and content digest.
 type prepared struct {
 	key    string
+	route  string // the Harnext account (token) the session is uploaded with
 	digest string
 	body   []byte
 }
@@ -348,7 +349,7 @@ func groupRows(rows []aggregate.Row) [][]aggregate.Row {
 
 // prepare returns the valid sessions in order of first appearance, the number of sessions dropped as invalid and the number
 // the gate held back. The gate decides once per session on its first row; its AccountHash goes into the body and its RouteID
-// into the ledger key, so a session routed elsewhere is sent again. The digest covers configVersion too, so sessions are
+// (the Harnext account whose token uploads it) into the ledger key, so a session routed elsewhere is sent again. The digest covers configVersion too, so sessions are
 // re-sent when the configuration that produced their counters changes. A nil gate sends nothing.
 func prepare(rows []aggregate.Row, configVersion int64, gate func(aggregate.Row) Decision) (out []prepared, invalid, skipped int) {
 	for _, group := range groupRows(rows) {
@@ -377,7 +378,7 @@ func prepare(rows []aggregate.Row, configVersion int64, gate func(aggregate.Row)
 		var v [8]byte
 		binary.BigEndian.PutUint64(v[:], uint64(max(configVersion, 0)))
 		h.Write(v[:])
-		out = append(out, prepared{key: rowKey(r) + "\x00" + d.RouteID, digest: hex.EncodeToString(h.Sum(nil)[:16]), body: body})
+		out = append(out, prepared{key: rowKey(r) + "\x00" + d.RouteID, route: d.RouteID, digest: hex.EncodeToString(h.Sum(nil)[:16]), body: body})
 	}
 	return out, invalid, skipped
 }

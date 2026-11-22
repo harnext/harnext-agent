@@ -55,7 +55,7 @@ func New(env Env) *cobra.Command {
 	root.SetVersionTemplate("harnext-agent " + strings.ReplaceAll(env.Version, "{{", "") + "\n")
 	root.SetOut(env.Out)
 	root.SetErr(env.Err)
-	root.AddCommand(initCmd(env), runCmd(env), statusCmd(env), statsCmd(env), previewCmd(env), stopCmd(env), serviceCmd(env), copilotCmd(env), scanCmd(env))
+	root.AddCommand(initCmd(env), logoutCmd(env), runCmd(env), statusCmd(env), statsCmd(env), previewCmd(env), stopCmd(env), serviceCmd(env), copilotCmd(env), scanCmd(env))
 	return root
 }
 
@@ -63,9 +63,12 @@ func initCmd(env Env) *cobra.Command {
 	var token, server string
 	var tokenStdin, devLocalhost bool
 	c := &cobra.Command{
-		Use:   "init",
-		Short: "Store the agent token and server address",
-		Long: "Stores the agent token (file mode 0600) and the server address.\n" +
+		Use:     "init",
+		Aliases: []string{"login"},
+		Short:   "Add a Harnext account (its agent token) and store the server address",
+		Long: "Stores the agent token (file mode 0600) and the server address. Run it once for every Harnext account you use on\n" +
+			"this machine (for example a personal and a company account): each account collects the usage of the tool accounts\n" +
+			"that sign in with its e-mail. Adding a token that is already stored changes nothing.\n" +
 			"Prefer --token-stdin or the HARNEXT_TOKEN variable over --token: command line arguments\n" +
 			"are visible to other local users and stay in shell history.",
 		Args: cobra.NoArgs,
@@ -92,10 +95,14 @@ func initCmd(env Env) *cobra.Command {
 			if err := env.Paths.SaveSettings(service.Settings{ServerURL: server, AllowInsecureLocalhost: devLocalhost}); err != nil {
 				return err
 			}
-			if err := env.Paths.SaveToken(token); err != nil {
+			acct, err := env.Paths.AddAccount(token)
+			switch {
+			case errors.Is(err, service.ErrTooManyAccounts):
+				return fmt.Errorf("this machine already holds %d accounts: remove one with `harnext-agent logout <id>` first", service.MaxAccounts)
+			case err != nil:
 				return err
 			}
-			fmt.Fprintln(env.Out, "Saved. Start the agent with: harnext-agent run")
+			fmt.Fprintf(env.Out, "Saved account %s. Start the agent with: harnext-agent run\n", acct.ID)
 			if _, running := service.RunningPID(env.Paths.Lock); running {
 				fmt.Fprintln(env.Out, "The agent is already running: restart it to use the new settings (stop, then run).")
 			}
@@ -107,6 +114,43 @@ func initCmd(env Env) *cobra.Command {
 	c.Flags().StringVar(&server, "server", "", "server address, https://host")
 	c.Flags().BoolVar(&devLocalhost, "dev-allow-insecure-localhost", false, "development only: allow http:// for localhost")
 	return c
+}
+
+func logoutCmd(env Env) *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout [account-id]",
+		Short: "Remove a Harnext account from this machine",
+		Long: "Removes one Harnext account (its token and stored identity). The id is shown by `harnext-agent status`; it may be\n" +
+			"left out when there is only one account. Data already sent stays in Harnext.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			prefix := ""
+			if len(args) == 1 {
+				prefix = args[0]
+				if prefix == "" {
+					return errors.New("account id is empty")
+				}
+			} else if list, err := env.Paths.LoadAccounts(); err == nil && len(list) > 1 {
+				return errors.New("more than one account is stored: name the one to remove (see `harnext-agent status`)")
+			}
+			acct, err := env.Paths.RemoveAccount(prefix)
+			switch {
+			case errors.Is(err, service.ErrNotInitialized):
+				return errors.New("no account is stored on this machine")
+			case errors.Is(err, service.ErrNoSuchAccount):
+				return errors.New("no stored account has that id (see `harnext-agent status`)")
+			case errors.Is(err, service.ErrAmbiguousAccount):
+				return errors.New("that id matches more than one account: type more of it")
+			case err != nil:
+				return err
+			}
+			fmt.Fprintf(env.Out, "Removed account %s.\n", acct.ID)
+			if _, running := service.RunningPID(env.Paths.Lock); running {
+				fmt.Fprintln(env.Out, "The agent is running: restart it to stop using that account (stop, then run).")
+			}
+			return nil
+		},
+	}
 }
 
 func runCmd(env Env) *cobra.Command {

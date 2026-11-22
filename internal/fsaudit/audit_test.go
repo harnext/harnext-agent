@@ -30,7 +30,7 @@ type use struct{ file, call string }
 
 // allowed maps a production file to the audited calls it makes and why. Paths are relative to the agent module. Files that
 // hold user content are read in exactly four places: the watchers (transcripts, chat sessions, the Copilot telemetry file),
-// project (git remote), account (the Claude account e-mail, hashed at once) and gitid (the git user.email, hashed at once). Everything else is the agent's own state, the service manager or the update check.
+// project (git remote), account (the Claude account e-mail, hashed at once) and copilotid (the GitHub account Copilot uses, read from VS Code's state database; the numeric id is hashed at once). Everything else is the agent's own state, the service manager or the update check.
 var allowed = map[use]string{
 	// User content: the only places the agent reads files that the user's tools wrote.
 	{"internal/watcher/watcher.go", "filepath.WalkDir"}: "lists *.jsonl transcripts under each Claude config directory's projects folder (~/.claude/projects, ~/.claude-work/projects ...) and the Copilot telemetry file's directory; contents are read only by followFile",
@@ -50,11 +50,11 @@ var allowed = map[use]string{
 	{"internal/account/account.go", "os.Lstat"}:         "refuses symlinks and non-regular files before the Claude global config is read",
 	{"internal/account/account.go", "os.Open"}:          "ClaudeEmail: streams .claude.json and keeps only oauthAccount.emailAddress; the e-mail is hashed at once and never stored or logged",
 	{"internal/attribution/gate.go", "os.Lstat"}:        "size and mtime of a Claude global config (.claude.json), only to skip parsing it again while it is unchanged; the file is not opened here",
-	{"internal/gitid/gitid.go", "os.Lstat"}:             "checks that a git config file (global, repository local or included) is a regular file, not a symlink out of the home directory, and records its mtime for the cache",
-	{"internal/gitid/gitid.go", "os.Open"}:              "reads git config files only (size-capped) to find user.email and include paths; the address is compared by hash and never stored or logged",
-	{"internal/gitid/gitid.go", "os.Getenv"}:            "XDG_CONFIG_HOME only, to locate git's global config directory; no other variable is read", // The agent's own state.
 	{"internal/storage/storage.go", "os.OpenFile"}:      "creates the agent's local database file (mode 0600)",
 	{"internal/remoteconfig/store.go", "os.Open"}:       "reads the cached signed configuration the agent wrote",
+	{"internal/copilotid/reader.go", "os.Lstat"}:        "checks that VS Code's state database (and its write-ahead log) is a regular file before a private copy is made",
+	{"internal/copilotid/reader.go", "os.Open"}:         "reads a copy source: the editor's state database, only to copy it; the keys read from the copy are the GitHub user name, its numeric id (hashed at once), the Copilot plan and the list of user names that used Copilot Chat; tokens in the OS keychain are never touched",
+	{"internal/copilotid/reader.go", "os.OpenFile"}:     "creates the private temporary copy (0600, exclusive) that is queried read-only and deleted at once",
 	{"internal/identity/store.go", "os.Open"}:           "reads the cached signed identity document the agent wrote",
 	{"internal/service/lock_unix.go", "os.OpenFile"}:    "single-instance lock file in the agent's directory",
 	{"internal/service/lock_unix.go", "os.Open"}:        "reads the PID from the agent's own lock file",

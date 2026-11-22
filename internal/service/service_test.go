@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -51,13 +52,13 @@ func TestValidateServerURL(t *testing.T) {
 	}
 }
 
-func TestSettingsAndTokenRoundTrip(t *testing.T) {
+func TestSettingsAndAccountsRoundTrip(t *testing.T) {
 	p := PathsIn(filepath.Join(t.TempDir(), "harnext"))
 	if _, err := p.LoadSettings(); err != ErrNotInitialized {
 		t.Fatalf("LoadSettings = %v, want ErrNotInitialized", err)
 	}
-	if _, err := p.LoadToken(); err != ErrNotInitialized {
-		t.Fatalf("LoadToken = %v, want ErrNotInitialized", err)
+	if _, err := p.LoadAccounts(); err != ErrNotInitialized {
+		t.Fatalf("LoadAccounts = %v, want ErrNotInitialized", err)
 	}
 	want := Settings{ServerURL: "http://127.0.0.1:3000", AllowInsecureLocalhost: true}
 	if err := p.SaveSettings(want); err != nil {
@@ -70,11 +71,12 @@ func TestSettingsAndTokenRoundTrip(t *testing.T) {
 	if got, err := p.LoadSettings(); err != nil || got != want {
 		t.Fatalf("settings = %+v err=%v", got, err)
 	}
-	if got, err := p.LoadToken(); err != nil || got != tok {
-		t.Fatalf("token = %q err=%v", got, err)
+	got, err := p.LoadAccounts()
+	if err != nil || len(got) != 1 || got[0].Token != tok || got[0].ID != AccountID(tok) || len(got[0].ID) != 10 {
+		t.Fatalf("accounts = %+v err=%v", got, err)
 	}
 	if runtime.GOOS != "windows" {
-		for _, f := range []string{p.Settings, p.Token} {
+		for _, f := range []string{p.Settings, p.Accounts} {
 			if fi, _ := os.Stat(f); fi.Mode().Perm() != 0o600 {
 				t.Errorf("%s mode = %v, want 0600", filepath.Base(f), fi.Mode().Perm())
 			}
@@ -83,12 +85,75 @@ func TestSettingsAndTokenRoundTrip(t *testing.T) {
 			t.Errorf("dir mode = %v, want 0700", di.Mode().Perm())
 		}
 	}
-	// A token with a trailing newline (hand-edited file) is accepted.
-	if err := os.WriteFile(p.Token, []byte(tok+"\n"), 0o600); err != nil {
+}
+
+func TestAddAndRemoveAccounts(t *testing.T) {
+	p := PathsIn(filepath.Join(t.TempDir(), "harnext"))
+	a, b := "hxt_"+strings.Repeat("A", 43), "hxt_"+strings.Repeat("B", 43)
+	first, err := p.AddAccount(a)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := p.LoadToken(); err != nil || got != tok {
-		t.Fatalf("token with newline = %q err=%v", got, err)
+	// Adding the same token again changes nothing.
+	again, err := p.AddAccount(a)
+	if err != nil || again != first {
+		t.Fatalf("again = %+v, %v", again, err)
+	}
+	second, err := p.AddAccount(b)
+	if err != nil || second.ID == first.ID {
+		t.Fatalf("second = %+v, %v", second, err)
+	}
+	list, _ := p.LoadAccounts()
+	if len(list) != 2 || list[0].Token != a || list[1].Token != b {
+		t.Fatalf("order not kept: %+v", list)
+	}
+	if err := os.WriteFile(p.IdentityFileFor(first.ID), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An empty prefix is ambiguous with two accounts, an unknown one matches nothing.
+	if _, err := p.RemoveAccount(""); err != ErrAmbiguousAccount {
+		t.Fatalf("empty prefix = %v", err)
+	}
+	if _, err := p.RemoveAccount("zzzz"); err != ErrNoSuchAccount {
+		t.Fatalf("unknown id = %v", err)
+	}
+	gone, err := p.RemoveAccount(first.ID[:4])
+	if err != nil || gone != first {
+		t.Fatalf("removed %+v, %v", gone, err)
+	}
+	if _, err := os.Stat(p.IdentityFileFor(first.ID)); !os.IsNotExist(err) {
+		t.Error("the identity document of the removed account was kept")
+	}
+	if list, _ := p.LoadAccounts(); len(list) != 1 || list[0].Token != b {
+		t.Fatalf("after removal: %+v", list)
+	}
+	// The last account can be removed by an empty prefix; the file goes away.
+	if _, err := p.RemoveAccount(""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.LoadAccounts(); err != ErrNotInitialized {
+		t.Fatalf("after the last removal: %v", err)
+	}
+}
+
+func TestAccountLimitAndInvalidFile(t *testing.T) {
+	p := PathsIn(filepath.Join(t.TempDir(), "harnext"))
+	for i := 0; i < MaxAccounts; i++ {
+		if _, err := p.AddAccount(fmt.Sprintf("hxt_%043d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.AddAccount(fmt.Sprintf("hxt_%043d", MaxAccounts)); err != ErrTooManyAccounts {
+		t.Fatalf("ninth account = %v", err)
+	}
+	for _, bad := range []string{`{`, `{"v":2,"accounts":[]}`, `{"v":1,"accounts":[{"token":"nope"}]}`,
+		`{"v":1,"accounts":[{"token":"hxt_aaaa"},{"token":"hxt_aaaa"}]}`} {
+		if err := os.WriteFile(p.Accounts, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.LoadAccounts(); err == nil || err == ErrNotInitialized {
+			t.Errorf("accepted %q: %v", bad, err)
+		}
 	}
 }
 
@@ -100,8 +165,8 @@ func TestInvalidInputsAreRejectedAndNotWritten(t *testing.T) {
 	if err := p.SaveSettings(Settings{ServerURL: "http://example.com"}); err == nil {
 		t.Fatal("insecure remote URL saved")
 	}
-	if _, err := os.Stat(p.Token); !os.IsNotExist(err) {
-		t.Fatal("token file exists")
+	if _, err := os.Stat(p.Accounts); !os.IsNotExist(err) {
+		t.Fatal("accounts file exists")
 	}
 	// A tampered settings file is refused at load time, not trusted.
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
@@ -147,7 +212,7 @@ func TestCopilotOTelPathSetting(t *testing.T) {
 func TestErrorsDoNotLeakTokenOrPath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "secret-dir")
 	p := PathsIn(dir)
-	if err := os.MkdirAll(p.Token, 0o700); err != nil { // a directory where the file should be
+	if err := os.MkdirAll(p.Accounts, 0o700); err != nil { // a directory where the file should be
 		t.Fatal(err)
 	}
 	tok := "hxt_" + strings.Repeat("Q", 43)

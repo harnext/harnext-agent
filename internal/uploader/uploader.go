@@ -66,8 +66,9 @@ type Ledger interface {
 }
 
 // Decision is the gate's answer for one session. Send=false keeps the session on the machine: it is never counted as pending,
-// backlog or error and never recorded as uploaded. AccountHash (64 lowercase hex) goes into the body; RouteID, the workspace
-// the server will route to, is part of the ledger key so a re-routed session is sent again. Reason is a content-free label.
+// backlog or error and never recorded as uploaded. AccountHash (64 lowercase hex) goes into the body; RouteID names the
+// Harnext account (token) the session is uploaded with and is part of the ledger key, so a session that moves to another
+// account is sent again. Reason is a content-free label.
 type Decision struct {
 	Send        bool
 	AccountHash string
@@ -76,10 +77,10 @@ type Decision struct {
 }
 
 type Options struct {
-	BaseURL      string        // https://host[/prefix]; no query, fragment or user info
-	Token        func() string // called per request, never logged
-	AgentVersion string        // 1..32 chars
-	Ledger       Ledger        // required
+	BaseURL      string                    // https://host[/prefix]; no query, fragment or user info
+	Token        func(route string) string // the token of the Harnext account a route names; called per request, never logged
+	AgentVersion string                    // 1..32 chars
+	Ledger       Ledger                    // required
 	// AllowInsecureLocalhost permits http:// for localhost, 127.0.0.1 and ::1 (development only).
 	AllowInsecureLocalhost bool
 	HTTPClient             *http.Client
@@ -260,25 +261,27 @@ func (u *Uploader) Sync(ctx context.Context, rows []aggregate.Row, configVersion
 	if u.opts.OnQueued != nil {
 		u.opts.OnQueued(len(pending))
 	}
+	// A refused token (revoked account) must not block the other accounts: its sessions wait for the next Sync and the error
+	// is returned after the rest was sent.
+	var unauthorized error
 	for len(pending) > 0 {
 		if res.Batches > 0 {
 			if err := u.opts.Sleep(ctx, u.opts.BatchPause); err != nil {
 				return res, err
 			}
 		}
-		n, size := 0, 0
-		for n < len(pending) && n < MaxSessionsPerPost {
-			size += len(pending[n].body) + 1
-			if n > 0 && size > u.opts.MaxBodyBytes {
-				break
-			}
-			n++
-		}
-		batch := pending[:n]
-		pending = pending[n:]
+		var batch []prepared
+		batch, pending = nextBatch(pending, u.opts.MaxBodyBytes)
+		n := len(batch)
 		res.Remaining = len(pending) + n // the batch counts as queued until the server answers
 
 		rowErrs, err := u.post(ctx, batch, configVersion)
+		if e, ok := err.(*Error); ok && e.Code == CodeUnauthorized {
+			unauthorized = err
+			pending = dropRoute(pending, batch[0].route)
+			res.Remaining = len(pending)
+			continue
+		}
 		if err != nil {
 			return res, err
 		}
@@ -309,7 +312,37 @@ func (u *Uploader) Sync(ctx context.Context, rows []aggregate.Row, configVersion
 			u.opts.OnBatch(res)
 		}
 	}
-	return res, nil
+	return res, unauthorized
+}
+
+// nextBatch takes the first pending session and up to MaxSessionsPerPost (and maxBody bytes) more sessions of the same route,
+// in order; the rest keeps its order.
+func nextBatch(pending []prepared, maxBody int) (batch, rest []prepared) {
+	route := pending[0].route
+	size := 0
+	for _, p := range pending {
+		if p.route == route && len(batch) < MaxSessionsPerPost {
+			size += len(p.body) + 1
+			if len(batch) > 0 && size > maxBody {
+				rest = append(rest, p)
+				continue
+			}
+			batch = append(batch, p)
+			continue
+		}
+		rest = append(rest, p)
+	}
+	return batch, rest
+}
+
+func dropRoute(pending []prepared, route string) []prepared {
+	out := pending[:0:0]
+	for _, p := range pending {
+		if p.route != route {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // newestSessionsFirst orders rows by the end of their session, newest first. The order inside
@@ -358,7 +391,7 @@ func encodeBody(agentVersion string, configVersion int64, batch []prepared) []by
 
 // post sends one batch and returns the per-row error codes by batch index.
 func (u *Uploader) post(ctx context.Context, batch []prepared, configVersion int64) (map[int]string, error) {
-	tok := u.opts.Token()
+	tok := u.opts.Token(batch[0].route)
 	if tok == "" {
 		return nil, &Error{Code: CodeNoToken}
 	}

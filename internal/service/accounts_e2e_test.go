@@ -1,11 +1,11 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -22,35 +22,39 @@ import (
 	"time"
 
 	"github.com/harnext/harnext-agent/internal/account"
+	"github.com/harnext/harnext-agent/internal/copilotid"
 	"github.com/harnext/harnext-agent/internal/identity"
 	"github.com/harnext/harnext-agent/internal/remoteconfig"
 )
 
 const (
-	acctMainEmail    = "main.user@example.test"
-	acctWorkEmail    = "work.user@example.test"
-	acctCopilotEmail = "copilot.user@example.test"
-	acctRouteMain    = "11111111-1111-4111-8111-111111111111"
-	acctRouteWork    = "22222222-2222-4222-8222-222222222222"
-	acctRouteCop     = "33333333-3333-4333-8333-333333333333"
-	acctKID          = "ktest"
+	acctMainEmail  = "main.user@example.test"
+	acctWorkEmail  = "work.user@example.test"
+	acctOtherEmail = "other.user@example.test"
+	// Two Harnext accounts on one machine: personal (main) and company (work).
+	tokMain = "hxt_" + "mainmainmainmainmainmainmainmainmainmain0001"
+	tokWork = "hxt_" + "workworkworkworkworkworkworkworkworkwork0002"
+	acctKID = "ktest"
 )
 
-// acctCloud is a fake server for ingest, the signed identity document and the account report.
+// acctCloud is a fake server for ingest, the signed identity document and the account report. Every Harnext account (token)
+// has its own bindings, as on the real server.
 type acctCloud struct {
 	srv  *httptest.Server
-	rec  *ingestRecorder
 	pub  ed25519.PublicKey
 	priv ed25519.PrivateKey
 
 	mu             sync.Mutex
-	bindings       []identity.Binding
-	identityStatus int                // non-zero: the identity endpoint answers with it
-	signWith       ed25519.PrivateKey // nil: the trusted key
+	bindings       map[string][]identity.Binding // by token
+	identityStatus int                           // non-zero: the identity endpoint answers with it
+	signWith       ed25519.PrivateKey            // nil: the trusted key
 	identityGets   int
-	reports        [][]byte
+	reports        map[string][][]byte // by token
+	ingest         []ingestCall
 	other          []string // every non-ingest request: URL and body
 }
+
+type ingestCall struct{ token, body string }
 
 func newAcctCloud(t *testing.T) *acctCloud {
 	t.Helper()
@@ -58,9 +62,9 @@ func newAcctCloud(t *testing.T) *acctCloud {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &acctCloud{rec: &ingestRecorder{}, pub: pub, priv: priv}
+	c := &acctCloud{pub: pub, priv: priv, bindings: map[string][]identity.Binding{}, reports: map[string][][]byte{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/ingest", c.rec.handler)
+	mux.HandleFunc("/api/v1/ingest", c.handleIngest)
 	mux.HandleFunc("/api/v1/agent-identity", c.handleIdentity)
 	mux.HandleFunc("/api/v1/agent-accounts", c.handleAccounts)
 	c.srv = httptest.NewServer(mux)
@@ -70,9 +74,13 @@ func newAcctCloud(t *testing.T) *acctCloud {
 
 func (c *acctCloud) keys() remoteconfig.TrustedKeys { return remoteconfig.TrustedKeys{acctKID: c.pub} }
 
-func (c *acctCloud) setBindings(bs ...identity.Binding) {
+func bearer(r *http.Request) string {
+	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+}
+
+func (c *acctCloud) setBindings(token string, bs ...identity.Binding) {
 	c.mu.Lock()
-	c.bindings = bs
+	c.bindings[token] = bs
 	c.mu.Unlock()
 }
 
@@ -89,34 +97,31 @@ func acctFingerprint(bs []identity.Binding) int64 {
 		if a.Tool != b.Tool {
 			return a.Tool < b.Tool
 		}
-		if a.Hash != b.Hash {
-			return a.Hash < b.Hash
-		}
-		return a.RouteID < b.RouteID
+		return a.Hash < b.Hash
 	})
 	h := sha256.New()
-	h.Write([]byte("harnext:identity:v1\n"))
+	h.Write([]byte("harnext:identity:v2\n"))
 	for _, b := range sorted {
-		fmt.Fprintf(h, "%s\t%s\t%s\n", b.Tool, b.Hash, b.RouteID)
+		fmt.Fprintf(h, "%s\t%s\n", b.Tool, b.Hash)
 	}
 	return int64(binary.BigEndian.Uint64(append([]byte{0, 0}, h.Sum(nil)[:6]...)))
 }
 
-// envelope signs the current bindings; the caller holds c.mu.
-func (c *acctCloud) envelope() []byte {
+// envelope signs the bindings of one token; the caller holds c.mu.
+func (c *acctCloud) envelope(token string) []byte {
 	type jb struct {
-		Tool    string `json:"tool"`
-		Hash    string `json:"hash"`
-		RouteID string `json:"route_id"`
+		Tool string `json:"tool"`
+		Hash string `json:"hash"`
 	}
-	list := make([]jb, 0, len(c.bindings))
-	for _, b := range c.bindings {
-		list = append(list, jb{b.Tool, b.Hash, b.RouteID})
+	bs := c.bindings[token]
+	list := make([]jb, 0, len(bs))
+	for _, b := range bs {
+		list = append(list, jb{b.Tool, b.Hash})
 	}
 	issued := time.Now().UTC().Truncate(time.Hour)
 	const layout = "2006-01-02T15:04:05.000Z"
 	payload, _ := json.Marshal(map[string]any{
-		"payload_version": 1, "identity_version": acctFingerprint(c.bindings),
+		"payload_version": 2, "identity_version": acctFingerprint(bs),
 		"issued_at": issued.Format(layout), "expires_at": issued.Add(24 * time.Hour).Format(layout), "bindings": list,
 	})
 	key := c.priv
@@ -131,19 +136,32 @@ func (c *acctCloud) envelope() []byte {
 	return body
 }
 
+func (c *acctCloud) known(token string) bool { return token == tokMain || token == tokWork }
+
+func (c *acctCloud) handleIngest(w http.ResponseWriter, r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	c.mu.Lock()
+	c.ingest = append(c.ingest, ingestCall{bearer(r), string(b)})
+	c.mu.Unlock()
+	var env struct{ Sessions []json.RawMessage }
+	_ = json.Unmarshal(b, &env)
+	fmt.Fprintf(w, `{"accepted":%d,"rejected":0,"errors":[]}`, len(env.Sessions))
+}
+
 func (c *acctCloud) handleIdentity(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.identityGets++
 	c.other = append(c.other, r.URL.String())
+	tok := bearer(r)
 	switch {
 	case c.identityStatus != 0:
 		w.WriteHeader(c.identityStatus)
-	case r.Header.Get("Authorization") != "Bearer "+testToken:
+	case !c.known(tok):
 		w.WriteHeader(http.StatusUnauthorized)
 	default:
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(c.envelope())
+		_, _ = w.Write(c.envelope(tok))
 	}
 }
 
@@ -152,19 +170,38 @@ func (c *acctCloud) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.other = append(c.other, r.URL.String()+" "+string(body))
-	if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer "+testToken {
+	tok := bearer(r)
+	if r.Method != http.MethodPost || !c.known(tok) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	c.reports = append(c.reports, body)
+	c.reports[tok] = append(c.reports[tok], body)
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(c.envelope())
+	_, _ = w.Write(c.envelope(tok))
 }
 
-func (c *acctCloud) reportList() [][]byte {
+func (c *acctCloud) reportList(token string) []identity.Report {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([][]byte(nil), c.reports...)
+	var out []identity.Report
+	for _, b := range c.reports[token] {
+		var rep identity.Report
+		if err := json.Unmarshal(b, &rep); err != nil {
+			panic("report body: " + err.Error())
+		}
+		out = append(out, rep)
+	}
+	return out
+}
+
+func (c *acctCloud) reportCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, r := range c.reports {
+		n += len(r)
+	}
+	return n
 }
 
 func (c *acctCloud) gets() int {
@@ -173,20 +210,10 @@ func (c *acctCloud) gets() int {
 	return c.identityGets
 }
 
-// reportedAccounts is every account of every report received so far.
-func (c *acctCloud) reportedAccounts(t *testing.T) []identity.Account {
-	t.Helper()
-	var out []identity.Account
-	for _, b := range c.reportList() {
-		var req struct {
-			Accounts []identity.Account `json:"accounts"`
-		}
-		if err := json.Unmarshal(b, &req); err != nil {
-			t.Fatalf("report body: %v", err)
-		}
-		out = append(out, req.Accounts...)
-	}
-	return out
+func (c *acctCloud) uploads() []ingestCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ingestCall(nil), c.ingest...)
 }
 
 type acctLog struct {
@@ -212,16 +239,18 @@ type acctHarness struct {
 	home     string
 	chatRoot string
 	otel     string
+	vscode   string // VS Code globalStorage directory
 	log      *acctLog
 }
 
-func newAcctHarness(t *testing.T) *acctHarness {
+func newAcctHarness(t *testing.T, tokens ...string) *acctHarness {
 	t.Helper()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HARNEXT_NO_AUTO_UPDATE", "1")
 	h := &acctHarness{cloud: newAcctCloud(t), home: t.TempDir(), log: &acctLog{},
-		chatRoot: filepath.Join(t.TempDir(), "workspaceStorage"), otel: filepath.Join(t.TempDir(), "telemetry", "otel.jsonl")}
+		chatRoot: filepath.Join(t.TempDir(), "workspaceStorage"), otel: filepath.Join(t.TempDir(), "telemetry", "otel.jsonl"),
+		vscode: filepath.Join(t.TempDir(), "globalStorage")}
 	h.paths = PathsIn(filepath.Join(t.TempDir(), "agent"))
 	if err := os.MkdirAll(filepath.Dir(h.otel), 0o755); err != nil {
 		t.Fatal(err)
@@ -229,14 +258,23 @@ func newAcctHarness(t *testing.T) *acctHarness {
 	if err := h.paths.SaveSettings(Settings{ServerURL: h.cloud.srv.URL, AllowInsecureLocalhost: true, CopilotOTelPath: h.otel}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.paths.SaveToken(testToken); err != nil {
-		t.Fatal(err)
+	if len(tokens) == 0 {
+		tokens = []string{tokMain}
+	}
+	for _, tok := range tokens {
+		if err := h.paths.SaveToken(tok); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return h
 }
 
-func acctBinding(tool, email, route string) identity.Binding {
-	return identity.Binding{Tool: tool, Hash: account.Hash(email), RouteID: route}
+func claudeBinding(email string) identity.Binding {
+	return identity.Binding{Tool: identity.ToolClaudeCode, Hash: account.Hash(email)}
+}
+
+func copilotBinding(githubID string) identity.Binding {
+	return identity.Binding{Tool: identity.ToolVSCodeCopilot, Hash: copilotid.IDHash(githubID)}
 }
 
 // claudeAccount writes a fake global config for one Claude config directory and returns the directory.
@@ -254,6 +292,35 @@ func (h *acctHarness) claudeAccount(t *testing.T, dir, email string) string {
 		t.Fatal(err)
 	}
 	return filepath.Join(h.home, dir, "projects", "proj")
+}
+
+// vscodeState writes the editor's state database: the active GitHub account (login, numeric id) and the other known logins.
+func (h *acctHarness) vscodeState(t *testing.T, active, id string, others ...string) {
+	t.Helper()
+	if err := os.MkdirAll(h.vscode, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(h.vscode, "state.vscdb")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)`); err != nil {
+		t.Fatal(err)
+	}
+	put := func(k, v string) {
+		if _, err := db.Exec(`INSERT INTO ItemTable VALUES (?, ?)`, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage := `[{"extensionId":"github.copilot-chat"}]`
+	put("github.copilot-github", active)
+	put("github-"+active+"-usages", usage)
+	for _, o := range others {
+		put("github-"+o+"-usages", usage)
+	}
+	put("defaultAccount.cachedPolicyData", fmt.Sprintf(`{"accountPolicyData":{"accountId":%q}}`, id))
+	put("extensionsAssignmentFilterProvider.copilotSku", "copilot_for_business_seat_quota")
 }
 
 func acctTranscript(id string, at time.Time) string {
@@ -277,7 +344,7 @@ func (h *acctHarness) start(t *testing.T, keys remoteconfig.TrustedKeys) (stop f
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, RunOptions{
-			Paths: h.paths, Version: "0.1.0", Home: h.home, ChatRoots: []string{h.chatRoot}, Keys: keys, Logf: h.log.logf,
+			Paths: h.paths, Version: "0.1.0", Home: h.home, ChatRoots: []string{h.chatRoot}, CopilotStateDirs: []string{h.vscode}, Keys: keys, Logf: h.log.logf,
 			FlushInterval: 30 * time.Millisecond, UploadPeriod: time.Hour, IdentityPeriod: 50 * time.Millisecond,
 			AccountCheckPeriod: 50 * time.Millisecond, AccountReportEvery: time.Hour, AccountReportGap: 50 * time.Millisecond,
 		})
@@ -300,22 +367,24 @@ func (h *acctHarness) start(t *testing.T, keys remoteconfig.TrustedKeys) (stop f
 	return stop
 }
 
-// uploaded maps each uploaded session id to its account hash.
-func (h *acctHarness) uploaded(t *testing.T) map[string]string {
+type uploadedSession struct{ hash, token string }
+
+// uploaded maps each uploaded session id to its account hash and the token that carried it.
+func (h *acctHarness) uploaded(t *testing.T) map[string]uploadedSession {
 	t.Helper()
-	out := map[string]string{}
-	for _, b := range h.cloud.rec.all() {
+	out := map[string]uploadedSession{}
+	for _, call := range h.cloud.uploads() {
 		var env struct {
 			Sessions []struct {
 				ID   string `json:"session_external_id"`
 				Hash string `json:"account_hash"`
 			} `json:"sessions"`
 		}
-		if err := json.Unmarshal([]byte(b), &env); err != nil {
+		if err := json.Unmarshal([]byte(call.body), &env); err != nil {
 			t.Fatal(err)
 		}
 		for _, s := range env.Sessions {
-			out[s.ID] = s.Hash
+			out[s.ID] = uploadedSession{s.Hash, call.token}
 		}
 	}
 	return out
@@ -330,89 +399,133 @@ func (h *acctHarness) status(t *testing.T) StatusFile {
 	return s
 }
 
-// noClearIdentity fails when a clear e-mail address (its local part) shows up in anything that left the machine, in the status file
-// or in the log.
+// harnextStatus is the gate picture of one stored account.
+func (h *acctHarness) harnextStatus(t *testing.T, token string) (HarnextAccountStatus, bool) {
+	t.Helper()
+	for _, a := range h.status(t).Accounts.Harnext {
+		if a.ID == AccountID(token) {
+			return a, true
+		}
+	}
+	return HarnextAccountStatus{}, false
+}
+
+// noClearIdentity fails when a clear e-mail address (its local part), a token, a GitHub user name or the numeric GitHub id shows up in
+// anything that left the machine, in the status file or in the log (a GitHub user name only goes to the accounts endpoint).
 func (h *acctHarness) noClearIdentity(t *testing.T) {
 	t.Helper()
 	raw, _ := os.ReadFile(h.paths.Status)
 	all := []string{string(raw), h.log.text()}
-	all = append(all, h.cloud.rec.all()...)
+	for _, c := range h.cloud.uploads() {
+		all = append(all, c.body)
+	}
 	h.cloud.mu.Lock()
 	all = append(all, h.cloud.other...)
 	h.cloud.mu.Unlock()
 	for _, text := range all {
-		for _, bad := range []string{"main.user", "work.user", "copilot.user", testToken, h.home} {
+		for _, bad := range []string{"main.user", "work.user", "other.user", tokMain, tokWork, h.home, "4242"} {
 			if strings.Contains(text, bad) {
 				t.Fatalf("clear identity %q found in:\n%s", bad, text)
 			}
 		}
 	}
-	for _, b := range h.cloud.rec.all() {
-		if strings.Contains(b, "@") {
-			t.Fatalf("ingest body holds an e-mail sign: %s", b)
+	for _, c := range h.cloud.uploads() {
+		if strings.Contains(c.body, "@") || strings.Contains(c.body, "octocat") {
+			t.Fatalf("ingest body holds an e-mail sign or a GitHub name: %s", c.body)
+		}
+	}
+	for _, text := range []string{string(raw), h.log.text()} {
+		if strings.Contains(text, "octocat") {
+			t.Fatalf("GitHub user name found in:\n%s", text)
 		}
 	}
 }
 
+// Two Harnext accounts on one machine: each collects the Claude Code account that signs in with its e-mail, and a third Claude
+// Code account that matches neither stays on the machine and is only counted.
 func TestAccountsEndToEnd(t *testing.T) {
-	h := newAcctHarness(t)
+	h := newAcctHarness(t, tokMain, tokWork)
+	main := h.claudeAccount(t, ".claude", acctMainEmail)
+	work := h.claudeAccount(t, ".claude-work", acctWorkEmail)
+	other := h.claudeAccount(t, ".claude-other", acctOtherEmail)
+	h.session(t, main, "sess-main")
+	h.session(t, work, "sess-work")
+	h.session(t, other, "sess-other")
+	h.cloud.setBindings(tokMain, claudeBinding(acctMainEmail))
+	h.cloud.setBindings(tokWork, claudeBinding(acctWorkEmail))
+
+	h.start(t, h.cloud.keys())
+
+	// Each session leaves with its own account hash, carried by the token of the Harnext account that owns it.
+	eventually(t, "both matched sessions uploaded", func() bool {
+		u := h.uploaded(t)
+		return u["sess-main"].hash != "" && u["sess-work"].hash != ""
+	})
+	u := h.uploaded(t)
+	if got := u["sess-main"]; got.hash != account.Hash(acctMainEmail) || got.token != tokMain {
+		t.Fatalf("main session: %+v", got)
+	}
+	if got := u["sess-work"]; got.hash != account.Hash(acctWorkEmail) || got.token != tokWork {
+		t.Fatalf("work session: %+v", got)
+	}
+
+	// The unmatched account's session stays here; nothing about it is reported except a count.
+	eventually(t, "reports sent", func() bool {
+		return len(h.cloud.reportList(tokMain)) > 0 && len(h.cloud.reportList(tokWork)) > 0
+	})
+	for tok, label := range map[string]string{tokMain: "mai***@example.test", tokWork: "wor***@example.test"} {
+		rep := h.cloud.reportList(tok)[0]
+		if rep.Claude.Found != 3 || !rep.Claude.Matched || rep.Claude.Label != label {
+			t.Fatalf("report of %s = %+v", AccountID(tok), rep.Claude)
+		}
+	}
+	eventually(t, "status names the held back session", func() bool {
+		s := h.status(t)
+		return s.Accounts.Skipped["no_matching_account"] == 1 && s.Accounts.Sendable == 2 && len(s.Accounts.Harnext) == 2 && s.Accounts.ClaudeFound == 3
+	})
+	time.Sleep(300 * time.Millisecond)
+	if _, sent := h.uploaded(t)["sess-other"]; sent {
+		t.Fatal("the unmatched account's session was uploaded")
+	}
+	for _, id := range []string{AccountID(tokMain), AccountID(tokWork)} {
+		var found bool
+		for _, a := range h.status(t).Accounts.Harnext {
+			if a.ID == id {
+				found = a.Identity.State == IdentityOK && a.ClaudeMatched
+			}
+		}
+		if !found {
+			t.Fatalf("status of %s: %+v", id, h.status(t).Accounts)
+		}
+	}
+	h.noClearIdentity(t)
+}
+
+// A Harnext account that is removed stops being used; the other keeps working.
+func TestAccountsRevokedTokenDoesNotBlockTheOther(t *testing.T) {
+	h := newAcctHarness(t, tokMain, tokWork)
 	main := h.claudeAccount(t, ".claude", acctMainEmail)
 	work := h.claudeAccount(t, ".claude-work", acctWorkEmail)
 	h.session(t, main, "sess-main")
 	h.session(t, work, "sess-work")
-	h.cloud.setBindings(acctBinding(identity.ToolClaudeCode, acctMainEmail, acctRouteMain))
-	mainHash, workHash := account.Hash(acctMainEmail), account.Hash(acctWorkEmail)
+	h.cloud.setBindings(tokMain, claudeBinding(acctMainEmail))
+	h.cloud.setBindings(tokWork, claudeBinding(acctWorkEmail))
+	// The server no longer accepts the work token: every request with it is refused with 401.
+	srv := h.cloud.srv.Config.Handler
+	h.cloud.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bearer(r) == tokWork {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		srv.ServeHTTP(w, r)
+	})
 
 	h.start(t, h.cloud.keys())
-
-	// (a) Only the bound account's session is uploaded, with its own account hash.
-	eventually(t, "bound session uploaded", func() bool { return h.uploaded(t)["sess-main"] != "" })
-	if got := h.uploaded(t)["sess-main"]; got != mainHash {
-		t.Fatalf("account_hash = %q, want %q", got, mainHash)
-	}
-
-	// (b) The unbound account's session stays here and is reported with a masked label and its session count.
-	eventually(t, "unbound account reported", func() bool { return len(h.cloud.reportedAccounts(t)) > 0 })
-	accts := h.cloud.reportedAccounts(t)
-	if len(accts) != 1 || accts[0] != (identity.Account{Tool: identity.ToolClaudeCode, Hash: workHash, Label: "wor***@example.test", Sessions30d: 1}) {
-		t.Fatalf("reported accounts = %+v", accts)
-	}
-	eventually(t, "status names the held back account", func() bool {
-		s := h.status(t)
-		return s.Identity.State == IdentityOK && s.Accounts.Skipped["account_unbound"] == 1 && s.Accounts.Sendable == 1 && len(s.Accounts.Pending) == 1
-	})
+	eventually(t, "main session uploaded", func() bool { return h.uploaded(t)["sess-main"].hash != "" })
 	time.Sleep(300 * time.Millisecond)
 	if _, sent := h.uploaded(t)["sess-work"]; sent {
-		t.Fatal("the unbound account's session was uploaded")
+		t.Fatal("a session was uploaded with a refused token")
 	}
-	if n := len(h.cloud.reportList()); n != 1 {
-		t.Fatalf("%d reports, want exactly 1 (unchanged candidates are not reported again within the refresh period)", n)
-	}
-
-	// (f) The status file lists the skip reasons and holds no clear e-mail.
-	s := h.status(t)
-	if p := s.Accounts.Pending[0]; p.Label != "wor***@example.test" || p.Sessions != 1 || p.Tool != identity.ToolClaudeCode {
-		t.Fatalf("pending = %+v", p)
-	}
-	if s.Identity.Bindings != 1 || s.Upload.Skipped != 1 {
-		t.Fatalf("identity %+v, upload %+v", s.Identity, s.Upload)
-	}
-	h.noClearIdentity(t)
-
-	// (c) A binding that appears later makes the held session upload without a restart.
-	h.cloud.setBindings(
-		acctBinding(identity.ToolClaudeCode, acctMainEmail, acctRouteMain),
-		acctBinding(identity.ToolClaudeCode, acctWorkEmail, acctRouteWork),
-	)
-	eventually(t, "session uploaded after its account was bound", func() bool { return h.uploaded(t)["sess-work"] != "" })
-	if got := h.uploaded(t)["sess-work"]; got != workHash {
-		t.Fatalf("account_hash = %q, want %q", got, workHash)
-	}
-	eventually(t, "nothing pending any more", func() bool {
-		s := h.status(t)
-		return s.Accounts.Sendable == 2 && len(s.Accounts.Pending) == 0 && len(s.Accounts.Skipped) == 0
-	})
-	h.noClearIdentity(t)
 }
 
 // Without a valid signed identity nothing leaves the machine and nothing is reported.
@@ -435,26 +548,26 @@ func TestAccountsFailClosedWithoutValidIdentity(t *testing.T) {
 			h := newAcctHarness(t)
 			main := h.claudeAccount(t, ".claude", acctMainEmail)
 			h.session(t, main, "sess-main")
-			h.cloud.setBindings(acctBinding(identity.ToolClaudeCode, acctMainEmail, acctRouteMain))
+			h.cloud.setBindings(tokMain, claudeBinding(acctMainEmail))
 			h.cloud.set(tc.setup)
 
 			h.start(t, tc.keys(h.cloud))
 			eventually(t, "session read and held back", func() bool {
-				s := h.status(t)
-				return s.Identity.State == tc.state && s.Accounts.Skipped["identity_pending"] == 1
+				a, ok := h.harnextStatus(t, tokMain)
+				return ok && a.Identity.State == tc.state && h.status(t).Accounts.Skipped["identity_pending"] == 1
 			})
 			time.Sleep(400 * time.Millisecond)
-			if n := len(h.cloud.rec.all()); n != 0 {
+			if n := len(h.cloud.uploads()); n != 0 {
 				t.Fatalf("%d uploads without a valid identity", n)
 			}
-			if n := len(h.cloud.reportList()); n != 0 {
+			if n := h.cloud.reportCount(); n != 0 {
 				t.Fatalf("%d account reports without a valid identity", n)
 			}
 			if tc.asked && h.cloud.gets() == 0 {
 				t.Fatal("the identity was never requested")
 			}
-			if s := h.status(t); s.Accounts.Sendable != 0 || s.Identity.Bindings != 0 {
-				t.Fatalf("status = %+v / %+v", s.Identity, s.Accounts)
+			if s := h.status(t); s.Accounts.Sendable != 0 {
+				t.Fatalf("status = %+v", s.Accounts)
 			}
 			if tc.name == "no trusted keys" && h.cloud.gets() != 0 {
 				t.Fatal("identity requested without trusted keys")
@@ -467,71 +580,73 @@ func TestAccountsFailClosedWithoutValidIdentity(t *testing.T) {
 	}
 }
 
-// A Copilot session belongs to the git user.email of its workspace folder.
-func TestAccountsCopilotMatchedByGitEmail(t *testing.T) {
+// A Copilot session belongs to the GitHub account VS Code used when it ran, and goes out only when the user selected that account.
+func TestAccountsCopilotSelectedGitHubAccount(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		config string
-		bound  bool
-		want   string // skip reason when nothing is uploaded
+		name     string
+		editor   bool   // the editor's state database exists
+		selected string // numeric GitHub id the Harnext account selected ("" = nothing selected)
+		want     string // skip reason when nothing is uploaded
 	}{
-		{"bound git email", "[user]\n\temail = " + acctCopilotEmail + "\n", true, ""},
-		{"unbound git email", "[user]\n\temail = " + acctCopilotEmail + "\n", false, "account_unbound"},
-		{"no git email", "[core]\n\tbare = false\n", true, "git_email_missing"},
+		{"selected account", true, "4242", ""},
+		{"another account selected", true, "9999", "no_matching_account"},
+		{"nothing selected", true, "", "no_matching_account"},
+		{"no editor state", false, "4242", "copilot_account_unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newAcctHarness(t)
-			repo := filepath.Join(t.TempDir(), "repo")
-			if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			for name, body := range map[string]string{"config": tc.config, "HEAD": "ref: refs/heads/main\n"} {
-				if err := os.WriteFile(filepath.Join(repo, ".git", name), []byte(body), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
 			(&chatHarness{otel: h.otel, chatRoot: h.chatRoot}).writeFiles(t)
-			uri := filepath.ToSlash(repo)
-			if !strings.HasPrefix(uri, "/") {
-				uri = "/" + uri
+			if tc.editor {
+				h.vscodeState(t, "octocat", "4242")
 			}
-			ws := filepath.Join(h.chatRoot, "hash0001", "workspace.json")
-			if err := os.WriteFile(ws, []byte(fmt.Sprintf(`{"folder":%q}`, "file://"+uri)), 0o644); err != nil {
-				t.Fatal(err)
+			// Claude Code is bound so that the identity document is valid; Copilot only when something is selected.
+			bs := []identity.Binding{claudeBinding(acctMainEmail)}
+			if tc.selected != "" {
+				bs = append(bs, copilotBinding(tc.selected))
 			}
-			if tc.bound {
-				h.cloud.setBindings(acctBinding(identity.ToolVSCodeCopilot, acctCopilotEmail, acctRouteCop))
-			} else {
-				h.cloud.setBindings(acctBinding(identity.ToolVSCodeCopilot, "someone.else@example.test", acctRouteCop))
-			}
+			h.cloud.setBindings(tokMain, bs...)
 
 			h.start(t, h.cloud.keys())
 			if tc.want == "" {
 				eventually(t, "copilot session uploaded", func() bool {
-					s := latestSession(t, h.cloud.rec)
+					s := latestSession(t, &ingestRecorder{bodies: bodiesOf(h.cloud.uploads())})
 					return s != nil && inputOf(s) == 600
 				})
-				if got := latestSession(t, h.cloud.rec)["account_hash"]; got != account.Hash(acctCopilotEmail) {
-					t.Fatalf("account_hash = %v", got)
+				got := latestSession(t, &ingestRecorder{bodies: bodiesOf(h.cloud.uploads())})
+				if got["account_hash"] != copilotid.IDHash("4242") {
+					t.Fatalf("account_hash = %v", got["account_hash"])
+				}
+				if calls := h.cloud.uploads(); calls[len(calls)-1].token != tokMain {
+					t.Fatal("uploaded with the wrong token")
 				}
 			} else {
 				eventually(t, "copilot session held back", func() bool { return h.status(t).Accounts.Skipped[tc.want] == 1 })
 				time.Sleep(300 * time.Millisecond)
-				if n := len(h.cloud.rec.all()); n != 0 {
+				if n := len(h.cloud.uploads()); n != 0 {
 					t.Fatalf("%d uploads, want none", n)
 				}
-				if tc.want == "account_unbound" {
-					eventually(t, "copilot account reported", func() bool { return len(h.cloud.reportedAccounts(t)) > 0 })
-					accts := h.cloud.reportedAccounts(t)
-					if len(accts) != 1 || accts[0].Tool != identity.ToolVSCodeCopilot || accts[0].Label != "cop***@example.test" || accts[0].Sessions30d != 1 {
-						t.Fatalf("reported accounts = %+v", accts)
-					}
+			}
+			// The GitHub accounts found are offered to the Harnext account only while none is selected (a selection made for an
+			// account that is not on this machine leaves nothing to offer here).
+			if tc.editor && tc.selected == "" {
+				eventually(t, "github account reported", func() bool { return len(h.cloud.reportList(tokMain)) > 0 })
+				var logins []identity.CopilotLogin
+				for _, rep := range h.cloud.reportList(tokMain) {
+					logins = append(logins, rep.Copilot.Logins...)
+				}
+				if len(logins) == 0 || logins[0].Login != "octocat" || logins[0].IDHash != copilotid.IDHash("4242") || logins[0].Plan != "business" {
+					t.Fatalf("reported logins = %+v", logins)
 				}
 			}
 			h.noClearIdentity(t)
-			if bytes.Contains([]byte(h.log.text()), []byte("example.test")) {
-				t.Fatalf("log holds a domain:\n%s", h.log.text())
-			}
 		})
 	}
+}
+
+func bodiesOf(calls []ingestCall) []string {
+	out := make([]string, len(calls))
+	for i, c := range calls {
+		out[i] = c.body
+	}
+	return out
 }

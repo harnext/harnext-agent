@@ -26,18 +26,42 @@ const (
 	maxRetryAfter       = time.Hour
 	maxETagBytes        = 128
 
-	MaxAccountsPerReport = 20
-	MaxReportBodyBytes   = 16 * 1024
-	MaxLabelLength       = 80
-	MaxSessions30d       = 1_000_000
+	MaxClaudeAccounts  = 20
+	MaxCopilotLogins   = 20
+	MaxReportBodyBytes = 16 * 1024
+	MaxLabelLength     = 80
+	MaxLoginLength     = 64
 )
 
-// Account is one locally detected tool account. Hash is the 64-hex account hash; Label is a masked display label.
-type Account struct {
-	Tool        string `json:"tool"`
-	Hash        string `json:"hash"`
-	Label       string `json:"label"`
-	Sessions30d int    `json:"sessions_30d"`
+// Copilot plans the server accepts.
+var copilotPlans = map[string]bool{"free": true, "pro": true, "business": true, "enterprise": true}
+
+// ClaudeReport is what the agent says about Claude Code accounts on this machine: how many it found and whether one of them
+// is the sign-in account of the Harnext account the token belongs to. Unmatched accounts are only counted; their address,
+// hash and label never leave the machine. Label is the masked label of the matched account.
+type ClaudeReport struct {
+	Found   int    `json:"found"`
+	Matched bool   `json:"matched"`
+	Label   string `json:"label,omitempty"`
+}
+
+// CopilotLogin is one GitHub account found on this machine. IDHash is the hash of its numeric user id (empty while the id is
+// unknown: such an account cannot be selected yet); Plan is empty when unknown.
+type CopilotLogin struct {
+	Login  string `json:"login"`
+	IDHash string `json:"id_hash,omitempty"`
+	Plan   string `json:"plan,omitempty"`
+}
+
+// CopilotReport lists the discovered GitHub accounts; the list is non-nil in a report.
+type CopilotReport struct {
+	Logins []CopilotLogin `json:"logins"`
+}
+
+// Report is the body of POST /api/v1/agent-accounts (contracts/agent-accounts.v1.schema.json).
+type Report struct {
+	Claude  ClaudeReport  `json:"claude"`
+	Copilot CopilotReport `json:"copilot"`
 }
 
 // ClientOptions configures a Client.
@@ -127,22 +151,19 @@ func (c *Client) Fetch(ctx context.Context, ifNoneMatch string) (*FetchResult, e
 	return c.do(ctx, http.MethodGet, target, nil, ifNoneMatch)
 }
 
-// Report sends the accounts and returns the server's signed envelope (not yet verified). The report is validated first and
+// Report sends the report and returns the server's signed envelope (not yet verified). The report is validated first and
 // is not sent when it breaks a contract rule (CodeInvalidReport).
-func (c *Client) Report(ctx context.Context, accounts []Account) (*FetchResult, error) {
-	if err := ValidateAccounts(accounts); err != nil {
+func (c *Client) Report(ctx context.Context, report Report) (*FetchResult, error) {
+	if err := ValidateReport(report); err != nil {
 		return nil, err
 	}
-	list := accounts
-	if list == nil {
-		list = []Account{}
+	if report.Copilot.Logins == nil {
+		report.Copilot.Logins = []CopilotLogin{}
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if enc.Encode(struct {
-		Accounts []Account `json:"accounts"`
-	}{list}) != nil {
+	if enc.Encode(report) != nil {
 		return nil, newError(CodeInvalidReport)
 	}
 	body := bytes.TrimRight(buf.Bytes(), "\n")
@@ -225,18 +246,35 @@ func (c *Client) do(ctx context.Context, method, target string, body []byte, ifN
 	}
 }
 
-// ValidateAccounts applies the account report contract plus one client-side rule: a label that contains '@' must be masked
+// ValidateReport applies the account report contract plus one client-side rule: a label that contains '@' must be masked
 // ('*'), so a plain e-mail address never leaves the machine. Errors are CodeInvalidReport and name no field or value.
-func ValidateAccounts(accounts []Account) error {
-	if len(accounts) > MaxAccountsPerReport {
+func ValidateReport(r Report) error {
+	c := r.Claude
+	if c.Found < 0 || c.Found > MaxClaudeAccounts || (c.Matched && (c.Found < 1 || !validLabel(c.Label))) || (!c.Matched && c.Label != "") {
 		return newError(CodeInvalidReport)
 	}
-	for _, a := range accounts {
-		if !validTool(a.Tool) || !validHash(a.Hash) || a.Sessions30d < 0 || a.Sessions30d > MaxSessions30d || !validLabel(a.Label) {
+	if len(r.Copilot.Logins) > MaxCopilotLogins {
+		return newError(CodeInvalidReport)
+	}
+	for _, l := range r.Copilot.Logins {
+		if !validLogin(l.Login) || (l.IDHash != "" && !validHash(l.IDHash)) || (l.Plan != "" && !copilotPlans[l.Plan]) {
 			return newError(CodeInvalidReport)
 		}
 	}
 	return nil
+}
+
+func validLogin(s string) bool {
+	if s == "" || len(s) > MaxLoginLength {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func validLabel(s string) bool {

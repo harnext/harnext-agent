@@ -27,8 +27,7 @@ type StatusFile struct {
 	Copilot CopilotStatus `json:"copilot"`
 	Config  ConfigStatus  `json:"config"`
 	Upload  UploadStatus  `json:"upload"`
-	// Identity and Accounts describe the account gate; both are empty when a test gate replaced it.
-	Identity IdentityStatus `json:"identity"`
+	// Accounts describes the account gate; it is empty when a test gate replaced it.
 	Accounts AccountsStatus `json:"accounts"`
 	// Backfill is the history import picture (30 days, newest first); see BackfillStatus.Line.
 	Backfill BackfillStatus `json:"backfill"`
@@ -99,27 +98,30 @@ type IdentityStatus struct {
 	LastError string    `json:"last_error,omitempty"`
 }
 
-// PendingAccount is a detected account without a binding. Label is masked (dev***@example.test); no e-mail or hash is kept.
-type PendingAccount struct {
-	Tool     string `json:"tool"`
-	Label    string `json:"label"`
-	Sessions int    `json:"sessions"`
+// HarnextAccountStatus is one Harnext account (one agent token) on this machine. ID is its local label, ClaudeLabel the masked
+// label of the Claude Code account that matched it; no e-mail, hash or token is kept.
+type HarnextAccountStatus struct {
+	ID              string         `json:"id"`
+	Identity        IdentityStatus `json:"identity"`
+	ClaudeMatched   bool           `json:"claude_matched,omitempty"`
+	ClaudeLabel     string         `json:"claude_label,omitempty"`
+	CopilotSelected bool           `json:"copilot_selected,omitempty"`
+	LastReport      time.Time      `json:"last_report,omitzero"`
+	LastReportError string         `json:"last_report_error,omitempty"`
 }
 
 // AccountsStatus counts sessions by the gate's latest verdict: Sendable ones may leave the machine, Skipped ones are kept by
-// reason (no_account, git_email_missing, identity_pending, account_unbound).
+// reason (no_account, copilot_account_unknown, identity_pending, no_matching_account). Unmatched tool accounts are only counted.
 type AccountsStatus struct {
-	Sendable        int              `json:"sendable,omitempty"`
-	Skipped         map[string]int   `json:"skipped,omitempty"`
-	Pending         []PendingAccount `json:"pending,omitempty"`
-	PendingTotal    int              `json:"pending_total,omitempty"`
-	LastReport      time.Time        `json:"last_report,omitzero"`
-	LastReportError string           `json:"last_report_error,omitempty"`
+	Harnext       []HarnextAccountStatus `json:"harnext,omitempty"`
+	ClaudeFound   int                    `json:"claude_found,omitempty"`
+	CopilotLogins int                    `json:"copilot_logins,omitempty"`
+	Sendable      int                    `json:"sendable,omitempty"`
+	Skipped       map[string]int         `json:"skipped,omitempty"`
 }
 
 // GateSummary is the gate picture that status, stats and preview show.
 type GateSummary struct {
-	Identity IdentityStatus
 	Accounts AccountsStatus
 }
 

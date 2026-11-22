@@ -11,10 +11,8 @@ import (
 	"github.com/harnext/harnext-agent/internal/uploader"
 )
 
-const connectHint = "Connect them in the Harnext panel under Connected Agents."
-
 // reasonOrder is the display order of the gate's skip reasons; unknown reasons follow alphabetically.
-var reasonOrder = []string{"no_account", "git_email_missing", "identity_pending", "account_unbound"}
+var reasonOrder = []string{"no_account", "copilot_account_unknown", "identity_pending", "no_matching_account", "account_unbound"}
 
 // gateFor returns the gate for preview and stats. It is nil only when a test substituted Env.Gate without a PreviewGate.
 func gateFor(env Env, db *storage.Store) (service.GateView, error) {
@@ -27,32 +25,51 @@ func gateFor(env Env, db *storage.Store) (service.GateView, error) {
 	return service.NewPreviewGate(env.Paths, db, service.PreviewGateOptions{})
 }
 
-// printAttribution writes the identity and account lines; it prints masked labels only, never an e-mail or a hash.
+// printAttribution writes the account lines; it prints masked labels only, never an e-mail, a GitHub name or a hash. Accounts on
+// this machine that match no Harnext account are only counted.
 func printAttribution(w io.Writer, s service.GateSummary) {
-	id, ac := s.Identity, s.Accounts
-	if id.State == "" {
+	ac := s.Accounts
+	if len(ac.Harnext) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "Identity:  %s\n", identityLine(id))
-	fmt.Fprintf(w, "Accounts:  %s\n", accountsLine(ac))
-	if ac.LastReportError != "" {
-		fmt.Fprintf(w, "Report:    the last account report failed (%s)\n", ac.LastReportError)
-	}
-	var labels []string
-	for _, p := range ac.Pending {
-		if label := safeLabel(p.Label); label != "" {
-			labels = append(labels, fmt.Sprintf("%s (%s, %s)", label, p.Tool, count(p.Sessions, "session")))
+	fmt.Fprintf(w, "Accounts:  %s on this machine\n", count(len(ac.Harnext), "Harnext account"))
+	matchedClaude := false
+	for _, h := range ac.Harnext {
+		fmt.Fprintf(w, "  %s  identity %s\n", h.ID, identityLine(h.Identity))
+		if h.ClaudeMatched {
+			matchedClaude = true
+			if label := safeLabel(h.ClaudeLabel); label != "" {
+				fmt.Fprintf(w, "            Claude Code: %s\n", label)
+			} else {
+				fmt.Fprintln(w, "            Claude Code: matched")
+			}
+		} else {
+			fmt.Fprintln(w, "            Claude Code: no signed-in account matches this Harnext account")
+		}
+		if h.CopilotSelected {
+			fmt.Fprintln(w, "            Copilot:     GitHub account selected")
+		} else {
+			fmt.Fprintln(w, "            Copilot:     no GitHub account selected")
+		}
+		if h.LastReportError != "" {
+			fmt.Fprintf(w, "            Report:      the last account report failed (%s)\n", h.LastReportError)
 		}
 	}
-	if len(labels) == 0 {
-		return
+	fmt.Fprintf(w, "Found:     %s signed in, %s found for Copilot\n", count(ac.ClaudeFound, "Claude Code account"), count(ac.CopilotLogins, "GitHub account"))
+	fmt.Fprintf(w, "Sessions:  %s\n", accountsLine(ac))
+	if ac.ClaudeFound > 0 && !matchedClaude {
+		fmt.Fprintln(w, "Hint:      Claude Code is signed in with an address that is not the e-mail of a Harnext account here; its usage stays on this machine.")
+		fmt.Fprintln(w, "           Sign in to Harnext with that e-mail (run `harnext-agent login` with its token) to collect it.")
 	}
-	more := ""
-	if n := ac.PendingTotal - len(labels); n > 0 {
-		more = fmt.Sprintf(" and %d more", n)
+	if ac.CopilotLogins > 0 {
+		sel := false
+		for _, h := range ac.Harnext {
+			sel = sel || h.CopilotSelected
+		}
+		if !sel {
+			fmt.Fprintln(w, "Hint:      choose your GitHub account for Copilot in the Harnext panel under Agents.")
+		}
 	}
-	fmt.Fprintf(w, "Pending:   %s%s\n", strings.Join(labels, "; "), more)
-	fmt.Fprintf(w, "           %s\n", connectHint)
 }
 
 func identityLine(id service.IdentityStatus) string {

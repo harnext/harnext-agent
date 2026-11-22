@@ -36,10 +36,10 @@ func statusCmd(env Env) *cobra.Command {
 			if u, err := url.Parse(settings.ServerURL); err == nil {
 				fmt.Fprintf(w, "Server:    %s\n", u.Host)
 			}
-			if _, err := env.Paths.LoadToken(); err != nil {
+			if accts, err := env.Paths.LoadAccounts(); err != nil {
 				fmt.Fprintln(w, "Token:     missing or invalid (run `harnext-agent init`)")
 			} else {
-				fmt.Fprintln(w, "Token:     stored")
+				fmt.Fprintf(w, "Token:     %s stored\n", count(len(accts), "account"))
 			}
 			pid, running := service.RunningPID(env.Paths.Lock)
 			if !running {
@@ -61,7 +61,7 @@ func statusCmd(env Env) *cobra.Command {
 			fmt.Fprintf(w, "Tracked:   %d sessions, %d responses, %d unreadable lines skipped\n", st.Sessions, st.UniqueResponses, st.SkippedLines)
 			fmt.Fprintf(w, "Analysis:  %s\n", configLine(st.Config))
 			fmt.Fprintf(w, "Upload:    %s\n", uploadLine(st.Upload))
-			printAttribution(w, service.GateSummary{Identity: st.Identity, Accounts: st.Accounts})
+			printAttribution(w, service.GateSummary{Accounts: st.Accounts})
 			if st.Backfill.Found > 0 || !st.Backfill.FirstPacketAt.IsZero() {
 				fmt.Fprintf(w, "Backfill:  %s\n", strings.TrimPrefix(st.Backfill.Line(), "backfill: "))
 			}
