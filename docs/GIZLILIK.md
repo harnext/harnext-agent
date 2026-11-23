@@ -1,6 +1,6 @@
 # Harnext gizlilik: agent neyi okur, neyi gönderir
 
-Bu sayfa, geliştiricinin bilgisayarında çalışan Harnext agent'ını anlatır. Buradaki her iddia kodla veya bir komutla doğrulanabilir; doğrulama yolları en sonda. İngilizce sürüm: [PRIVACY.md](PRIVACY.md). Hukuki metin (aydınlatma metni) bu sayfanın parçası değildir ve avukat onayı gerektirir (doğrulanmadı).
+Bu sayfa, geliştiricinin bilgisayarında çalışan Harnext agent'ını anlatır. Buradaki her iddia kodla veya bir komutla doğrulanabilir; doğrulama yolları en sonda. İngilizce sürüm: [PRIVACY.md](PRIVACY.md).
 
 ## Kısaca
 
