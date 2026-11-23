@@ -1,6 +1,6 @@
 # Harnext privacy: what the agent reads, what it sends
 
-This page describes the Harnext agent, the program that runs on a developer's computer. Every claim here can be checked against the code or by running a command; the last section shows how. A Turkish version is in [GIZLILIK.md](GIZLILIK.md). Legal wording (the privacy notice) is not part of this page and needs a lawyer's review (not verified).
+This page describes the Harnext agent, the program that runs on a developer's computer. Every claim here can be checked against the code or by running a command; the last section shows how. A Turkish version is in [GIZLILIK.md](GIZLILIK.md).
 
 ## In short
 
